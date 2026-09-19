@@ -1,0 +1,6 @@
+---
+# @Manilov — HomeAssistant OS VM hosted by @NikolaiGogol via libvirt. Not
+# bootstrapped by this Playbook yet; placeholders for the roadmap.
+# See docs/HomeServer__HomeAssistant_plan.md.
+manilov_vm_name: "hass_qemu16"
+manilov_data_dir: "/mnt/data"

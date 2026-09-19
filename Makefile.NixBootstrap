@@ -1,0 +1,4 @@
+# Manual testing for the Nix bootstrap step (role: bootstrap_nix).
+# See Makefile.Steps for the target list and INVENTORY selection.
+STEP_TAGS := nix
+include Makefile.Steps

@@ -1,0 +1,9 @@
+---
+# Minimal base prerequisites for a host that is about to be bootstrapped.
+# Packages are installed only when a required command is missing.
+bootstrap_base_manage_packages: true
+bootstrap_base_required_commands:
+  - curl
+  - xz
+# Filled by the OS-specific vars file (roles/bootstrap_base/vars/*.yml).
+bootstrap_base_packages: []

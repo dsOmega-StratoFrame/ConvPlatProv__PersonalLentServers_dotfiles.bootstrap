@@ -1,0 +1,111 @@
+---
+- name: Detect the Docker CLI
+  ansible.builtin.command: "docker --version"
+  register: bootstrap_docker_version
+  changed_when: false
+  failed_when: false
+
+- name: Set whether Docker is already present
+  ansible.builtin.set_fact:
+    bootstrap_docker_present: "{{ bootstrap_docker_version.rc == 0 }}"
+
+- name: Report detected Docker
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('Docker detected on ' + inventory_hostname + ': ' + bootstrap_docker_version.stdout)
+         if bootstrap_docker_present
+         else 'Docker not detected on ' + inventory_hostname }}
+
+- name: Fail when Docker is missing and installation is manual
+  ansible.builtin.fail:
+    msg: >-
+      Docker is not installed on {{ inventory_hostname }}. Install it from the
+      TOS App Center (Docker / Portainer) and re-run, or set
+      bootstrap_docker_install_method=apt.
+  when:
+    - not bootstrap_docker_present
+    - bootstrap_docker_install_method == 'manual'
+
+- name: Install Docker CE from the upstream apt repository
+  when: >-
+    bootstrap_docker_install_method == 'apt'
+    or (bootstrap_docker_install_method == 'detect' and not bootstrap_docker_present)
+  block:
+    - name: Fail when Docker CE cannot be installed on this OS family
+      ansible.builtin.fail:
+        msg: >-
+          Automatic Docker CE installation is only implemented for the Debian
+          family; {{ inventory_hostname }} reports '{{ ansible_os_family }}'.
+          Install Docker from the TOS App Center or set
+          bootstrap_docker_install_method=manual.
+      when: ansible_os_family != 'Debian'
+
+    - name: Ensure apt prerequisites for the Docker repository
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Ensure the apt keyring directory exists
+      ansible.builtin.file:
+        path: "{{ bootstrap_docker_gpg_path | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Add the Docker GPG key
+      ansible.builtin.get_url:
+        url: "{{ bootstrap_docker_gpg_url }}"
+        dest: "{{ bootstrap_docker_gpg_path }}"
+        mode: "0644"
+
+    - name: Add the Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ bootstrap_docker_apt_arch }} signed-by={{ bootstrap_docker_gpg_path }}]
+          {{ bootstrap_docker_apt_base_url }} {{ bootstrap_docker_apt_suite }} {{ bootstrap_docker_apt_channel }}
+        filename: docker
+        state: present
+
+    - name: Install Docker packages
+      ansible.builtin.apt:
+        name: "{{ bootstrap_docker_packages }}"
+        state: present
+        update_cache: true
+      register: bootstrap_docker_install
+
+    - name: Record that this repository installed Docker
+      ansible.builtin.set_fact:
+        bootstrap_docker_managed_by_us: true
+
+- name: Ensure the Docker daemon is enabled and running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+  when:
+    - bootstrap_docker_manage_daemon
+    - bootstrap_docker_present or (bootstrap_docker_install is defined)
+
+- name: Add the deployment user to the docker group
+  ansible.builtin.user:
+    name: "{{ bootstrap_docker_user }}"
+    groups: docker
+    append: true
+  when:
+    - bootstrap_docker_add_user_to_group
+    - bootstrap_docker_user | length > 0
+  register: bootstrap_docker_group_membership
+
+- name: Verify Docker is available
+  ansible.builtin.command: "docker --version"
+  register: bootstrap_docker_verify
+  changed_when: false
+
+- name: Report Docker status
+  ansible.builtin.debug:
+    msg: >-
+      {{ bootstrap_docker_verify.stdout }}
+      (managed by this repository: {{ bootstrap_docker_managed_by_us }})

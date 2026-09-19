@@ -1,0 +1,10 @@
+---
+roles:
+  # Installs the Nix package manager (multi-user, systemd).
+  - src: https://github.com/danielrolls/nix-install
+    name: danielrolls.nix
+    version: 7bef4db07967e433ca9bcf7c7de84eb87814583a
+
+collections:
+  # Container management for the layers running on @terra.
+  - name: community.docker

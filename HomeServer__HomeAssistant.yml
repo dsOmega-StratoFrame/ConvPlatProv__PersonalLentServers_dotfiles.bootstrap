@@ -1,0 +1,24 @@
+---
+# Home Server. Home Assistant.
+#
+# Layer 0 (@terra): bootstrap Nix and Docker on the TerraMaster NAS (TOS 6).
+# Later layers (@NikolaiGogol system container, @Manilov HAOS VM) get their own
+# plays once this one is green.
+#
+# See docs/HomeServer__HomeAssistant_plan.md and
+# docs/adr/0001-HomeServer__HomeAssistant.md.
+- name: Bootstrap @terra (TerraMaster NAS / TOS 6)
+  hosts: terra
+  gather_facts: true
+  roles:
+    # The backup MUST run before anything on the device is changed.
+    - role: backup_tos
+      tags: [backup]
+    - role: access_ssh
+      tags: [access, ssh]
+    - role: bootstrap_base
+      tags: [base, prereqs]
+    - role: bootstrap_nix
+      tags: [nix]
+    - role: bootstrap_docker
+      tags: [docker]

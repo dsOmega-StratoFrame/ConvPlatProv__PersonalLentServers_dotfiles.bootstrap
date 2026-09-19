@@ -1,0 +1,35 @@
+---
+# First deployment step: snapshot the TOS system configuration before any
+# change is applied and pull the archive to the control node.
+#
+# This is a *configuration* backup (system files), not a block-level image of
+# the TOS system disk. Pair it with TerraMaster's own config export when doing
+# risky work.
+backup_tos_local_dir: "{{ playbook_dir }}/backups"
+backup_tos_remote_dir: "/var/tmp"
+backup_tos_timestamp: "{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date +%Y%m%dT%H%M%S')) }}"
+backup_tos_archive: "{{ backup_tos_remote_dir }}/{{ inventory_hostname }}-tos-config-{{ backup_tos_timestamp }}.tar.gz"
+backup_tos_fetch: true
+
+# Curated system-configuration paths. Missing entries are ignored.
+backup_tos_paths:
+  - /etc/fstab
+  - /etc/mdadm.conf
+  - /etc/mdadm/mdadm.conf
+  - /etc/hostname
+  - /etc/hosts
+  - /etc/passwd
+  - /etc/group
+  - /etc/os-release
+  - /etc/network
+  - /etc/netplan
+  - /etc/systemd/system
+  - /etc/cron.d
+  - /etc/nix
+  - /etc/tos
+  - /var/spool/cron
+
+# Never archive credential material.
+backup_tos_excludes:
+  - /etc/shadow
+  - /etc/gshadow

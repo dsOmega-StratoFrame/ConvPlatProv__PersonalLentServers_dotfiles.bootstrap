@@ -1,0 +1,27 @@
+---
+# Idempotent verification of a bootstrapped @terra. Safe to run any time.
+- name: Verify @terra bootstrap
+  hosts: terra
+  gather_facts: false
+  tasks:
+    - name: Check Nix
+      ansible.builtin.command: "nix --version"
+      register: verify_nix
+      changed_when: false
+
+    - name: Check the Docker CLI
+      ansible.builtin.command: "docker --version"
+      register: verify_docker
+      changed_when: false
+
+    - name: Check the Docker daemon
+      ansible.builtin.command: "systemctl is-active docker"
+      register: verify_docker_daemon
+      changed_when: false
+
+    - name: Report verification results
+      ansible.builtin.debug:
+        msg:
+          - "nix:           {{ verify_nix.stdout }}"
+          - "docker:        {{ verify_docker.stdout }}"
+          - "docker daemon: {{ verify_docker_daemon.stdout }}"

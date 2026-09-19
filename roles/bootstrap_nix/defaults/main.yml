@@ -1,0 +1,15 @@
+---
+# Bootstraps the Nix package manager (multi-user, systemd) via the
+# danielrolls.nix role and applies HomeServer-specific /etc/nix/nix.conf.
+bootstrap_nix_version: ""
+bootstrap_nix_installer_checksum: ""
+bootstrap_nix_force_reinstall: false
+bootstrap_nix_flakes: true
+bootstrap_nix_remove_nix_directory: false
+bootstrap_nix_trusted_users: "root {{ ansible_user | default('root') }}"
+bootstrap_nix_experimental_features: "nix-command flakes"
+bootstrap_nix_extra_config: {}
+bootstrap_nix_config: "{{ bootstrap_nix_extra_config }}"
+bootstrap_nix_commands:
+  - "nix --version"
+  - "nix flake --help >/dev/null"

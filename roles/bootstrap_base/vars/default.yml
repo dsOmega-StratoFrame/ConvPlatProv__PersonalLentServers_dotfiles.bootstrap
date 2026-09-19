@@ -1,0 +1,8 @@
+---
+# Fallback prerequisites for unknown distributions (TOS 6 reports an
+# Ubuntu-compatible rootfs, but keep a sane default).
+bootstrap_base_packages:
+  - curl
+  - xz
+  - git
+  - jq

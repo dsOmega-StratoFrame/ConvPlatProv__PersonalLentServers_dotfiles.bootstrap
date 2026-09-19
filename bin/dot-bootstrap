@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -e
+
+if ! [ -x "$(command -v ansible)" ]; then
+    echo "Ansible is not installed.";
+    if [ -x "$(command -v brew)" ]; then
+        echo "Installing it via brew...";
+        brew install ansible
+    elif [ -x "$(command -v apt)" ]; then
+        echo "Installing it via apt...";
+        sudo apt-get update && sudo apt-get install -y ansible
+    elif [ -x "$(command -v yay)" ]; then
+        echo "Installing it via yay...";
+        yay -S ansible
+    elif [ -x "$(command -v pacman)" ]; then
+        echo "Installing it via pacman...";
+        sudo pacman -S ansible
+    else
+        echo "Error: couldn't find package manager to install ansible!";
+        exit 1
+    fi
+fi
+
+playbook="${1:-HomeServer__HomeAssistant.yml}"
+tags="${2:-}"
+
+if [ -z "$tags" ]; then
+    echo "Run all tags for ${playbook}? It will override current configurations."
+    select yn in "Yes" "No, choose tags" "Cancel"; do
+        case $yn in
+            Yes ) tags="all"; break;;
+            "No, choose tags" ) read -p "Enter tags: " tags; break;;
+            Cancel ) exit;;
+        esac
+    done
+fi
+
+ansible-playbook "./${playbook}" --tags "$tags" -v
+
+if command -v terminal-notifier 1>/dev/null 2>&1; then
+    terminal-notifier -title "homeserver-bootstrap: ${playbook}" -message "Bootstrap step complete."
+fi

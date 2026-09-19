@@ -1,0 +1,9 @@
+# Manual testing for the TOS backup step (role: backup_tos).
+# See Makefile.Steps for the target list and INVENTORY selection.
+STEP_TAGS := backup
+
+inspect:
+	@echo "Backups under backups/ and tests/artifacts/ (host subdirectories):"
+	@find backups tests/artifacts -type f 2>/dev/null || true
+
+include Makefile.Steps

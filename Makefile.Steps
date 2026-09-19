@@ -1,0 +1,65 @@
+# Shared manual-testing targets for a single bootstrap step.
+#
+# Usage: from a per-step makefile (e.g. Makefile.DockerDeployment) set STEP_TAGS
+# and include this file:
+#
+#   STEP_TAGS := docker
+#   include Makefile.Steps
+#
+# INVENTORY selects the target:
+#   hosts.ini                       -> real @terra (E2E)
+#   tests/integration/inventory.ini -> mock container (integration)
+#
+# Targets are marked human (interactive), agent (non-interactive) or mixed.
+
+STEP_TAGS ?=
+PLAYBOOK ?= HomeServer__HomeAssistant.yml
+INVENTORY ?= hosts.ini
+ANSIBLE_CONFIG ?= ansible.cfg
+ANSIBLE_ROLES_PATH ?= $(CURDIR)/roles
+COMPOSE ?= tests/integration/docker-compose.yml
+SSH_TARGET ?= terra
+
+.PHONY: help run dry verify up down shell shell-ssh logs clean
+
+help:
+	@echo "Step: $(STEP_TAGS)   INVENTORY=$(INVENTORY)"
+	@echo "  run       (mixed)  apply the step"
+	@echo "  dry       (agent)  --check --diff, no changes"
+	@echo "  verify    (agent)  run verify-terra.yml"
+	@echo "  up        (agent)  build+start the mock container"
+	@echo "  down      (agent)  stop+remove the mock container"
+	@echo "  shell     (human)  interactive shell in the mock container"
+	@echo "  shell-ssh (human)  interactive SSH to the real target"
+	@echo "  logs      (mixed)  follow the mock container logs"
+	@echo "  clean     (agent)  remove local test artifacts"
+
+run:
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
+	ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) -v
+
+dry:
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
+	ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) --check --diff -v
+
+verify:
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
+	ansible-playbook -i $(INVENTORY) verify-terra.yml -v
+
+up:
+	docker compose -f $(COMPOSE) up -d --build
+
+down:
+	docker compose -f $(COMPOSE) down -v
+
+shell:
+	docker compose -f $(COMPOSE) exec terra-mock bash
+
+shell-ssh:
+	ssh $(SSH_TARGET)
+
+logs:
+	docker compose -f $(COMPOSE) logs -f terra-mock
+
+clean:
+	rm -rf backups tests/artifacts

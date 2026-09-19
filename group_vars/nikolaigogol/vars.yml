@@ -1,0 +1,6 @@
+---
+# @NikolaiGogol — NixOS system container (the reusable Nix "SDK") running on
+# @terra. Not bootstrapped by this Playbook yet; placeholders for the roadmap.
+# See docs/HomeServer__HomeAssistant_plan.md.
+nikolaigogol_container_name: "NikolaiGogolSystem"
+nikolaigogol_image_name: "nikolaigogol:latest"

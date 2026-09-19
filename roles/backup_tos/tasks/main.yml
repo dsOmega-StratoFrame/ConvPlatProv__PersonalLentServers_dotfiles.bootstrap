@@ -1,0 +1,50 @@
+---
+- name: Record system identity for the backup manifest
+  ansible.builtin.command: "uname -a"
+  register: backup_tos_uname
+  changed_when: false
+  failed_when: false
+
+- name: Create the TOS configuration archive
+  ansible.builtin.command:
+    cmd: >-
+      tar --ignore-failed-read --warning=no-file-changed
+      -czf {{ backup_tos_archive }}
+      {% for pattern in backup_tos_excludes %}--exclude={{ pattern }} {% endfor %}
+      {{ backup_tos_paths | join(' ') }}
+  register: backup_tos_archive_result
+  changed_when: true
+  failed_when: backup_tos_archive_result.rc not in [0, 1, 2]
+
+- name: Ensure the local backup directory exists
+  ansible.builtin.file:
+    path: "{{ backup_tos_local_dir }}/{{ inventory_hostname }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  when: backup_tos_fetch
+
+- name: Fetch the TOS configuration archive to the control node
+  ansible.builtin.fetch:
+    src: "{{ backup_tos_archive }}"
+    dest: "{{ backup_tos_local_dir }}/{{ inventory_hostname }}/"
+    flat: true
+  when: backup_tos_fetch
+
+- name: Write a backup manifest next to the archive
+  ansible.builtin.copy:
+    dest: "{{ backup_tos_local_dir }}/{{ inventory_hostname }}/{{ backup_tos_timestamp }}-manifest.txt"
+    content: |
+      host: {{ inventory_hostname }}
+      timestamp: {{ backup_tos_timestamp }}
+      uname: {{ backup_tos_uname.stdout | default('n/a') }}
+      remote_archive: {{ backup_tos_archive }}
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: backup_tos_fetch
+
+- name: Report the backup location
+  ansible.builtin.debug:
+    msg: "TOS backup archived at {{ backup_tos_local_dir }}/{{ inventory_hostname }}/{{ backup_tos_archive | basename }}"

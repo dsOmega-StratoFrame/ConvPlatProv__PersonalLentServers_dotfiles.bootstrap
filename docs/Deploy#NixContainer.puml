@@ -1,0 +1,216 @@
+@startuml
+left to right direction
+allowmixing
+
+<style>
+.CodeManaged {
+    BackgroundColor PaleGreen
+}
+.UiManaged {
+    BackgroundColor LightBlue
+}
+.MixedManaged {
+    BackgroundColor LightYellow
+}
+</style>
+
+legend right
+    lines - connection (in any sense: be it a physical, logical or semantical)
+    dashed lines - deployment or generation
+endlegend
+
+' ========== MANAGEMENT LAYER (@salt) ==========
+node "Management & Development (@salt)" as salt {
+    frame "Linux Workstation" {
+        frame "Nix Environment" as SaltNix <<CodeManaged>> {
+            package "Ansible" as SaltAnsible
+            component "Git Repository" as GitRepo
+        }
+
+        frame HomeServer__HomeAssistant <<CodeManaged>> {
+            component HomeServerBootstrap [
+            HomeServer_bootstrap
+            ---
+            **Ansible** project to prepare @terra
+            ]
+
+            component DeployRs [
+                deploy-rs
+            ]
+            component "Dev Environment" as dev_env
+
+            GitRepo --> HomeServerBootstrap
+        }
+    }
+}
+
+actor Admin
+
+package "Infrastructure as Code (Git)" <<CodeManaged>> {
+    class "Nix Flake" as NixFlake {
+        + homeAssistantOS: derivation
+        + terraConfiguration: nixosModule
+        + vmImage: virtualBoxOVA
+    }
+
+    class "Ansible Playbooks" as AnsiblePlaybooks {
+        + bootstrap-terra.yml
+        + deploy-ha.yml
+        + configure-services.yml
+    }
+
+    class Dockerfile {
+        + NixOs.yml
+        + other-potential-services.yml
+    }
+}
+
+actor User
+
+' ========== TERRAMASTER LAYER (@terra) ==========
+node "Terramaster NAS (@terra)" as Terra <<UiManaged>> {
+    frame Tos__Nix <<CodeManaged>> {
+        package Tos__Nix_pkg [
+        Nix
+        ]
+        component NixManagedConfigs [
+            Nix-managed configs
+            ---
+            Bash, NeoVim...
+        ]
+
+        Tos__Nix_pkg --> NixManagedConfigs : install
+    }
+
+    frame TOSBaseSystem as TosBase <<MixedManaged>> {
+        folder DefaultEnvironment as DefaultEnv <<UiManaged>> {
+            package "Docker" as DockerPkg
+            package "NAS Services" as NasServices
+        }
+
+
+        component Docker <<CodeManaged>> {
+            artifact TerraDockerfile [
+            Dockerfile
+            ]
+            Dockerfile ..> TerraDockerfile : deploy
+
+            component "NixOS Container" as NixOsContainer <<CodeManaged>> {
+                component "USB Passthrough" as UsbZigbeeDocker
+                package ExternalDocker [
+                External Docker Services
+                ---
+                No nested virtualization
+                ]
+                component "NixOs (@NikolaiGogol)" as NixOs <<CodeManaged>> {
+                    component NixOs__Docker [
+                    Docker
+                    ---
+                    Managed by NixOs. Docker-in-Docker (as NixOs is container itself).
+                    ]
+                    component NixOs__HomeAssistant_module [
+                    NixOs HomeAssistant module
+                    ]
+                    component NixOs__Virtualization_module [
+                    NixOs virtualization module
+                    ]
+
+                    component NixOs__HomeAssistant <<CodeManaged>> {
+                        package CustomIntegrations [
+                        Custom Integrations via HomeAssistant Nix module
+                        ]
+                        NixOs__HomeAssistant_module ..> CustomIntegrations : generate
+
+                        package CustomAddons [
+                        Custom Addons via Nix and Docker
+                        ]
+                        NixOs__Docker ..> CustomAddons : deploy
+                    }
+                }
+
+                UsbZigbeeDocker --> NixOs__HomeAssistant : passthrough
+
+                component "VirtualBox" as Vbox <<CodeManaged>> {
+
+                    component "HomeAssistant VM" as HaVm <<MixedManaged>> {
+                        component "Home Assistant OS (@Manilov)" as HaOs <<UiManaged>> {
+                            artifact HM__Nix <<CodeManaged>> [
+                            Nix
+                            ---
+                            Manage HomeAssistant local configs
+                            ]
+                            package HM__Ansible <<CodeManaged>> [
+                            Ansible
+                            ---
+                            Init Nix
+                            ]
+                            HM__Ansible --> HM__Nix : install
+
+                            component HaSupervisor [
+                            HomeAssistant HaSupervisor
+                            ]
+                            folder "Add-ons" as Addons <<UiManaged>> {
+                                package Zigbee2MQTT
+                                package Mosquitto
+                            }
+                            component HaCore [
+                            HomeAssistant Core
+                            ]
+                            folder Ha_config [
+                            HomeAssistant Config Mount
+                            ]
+                        }
+                        component "USB Passthrough" as UsbZigbeeVm <<CodeManaged>>
+                    }
+
+                    UsbZigbeeVm --> HaOs : passthrough
+                }
+
+                NixOs__Virtualization_module ..> Vbox : manage vm (via libvirt)
+            }
+            TerraDockerfile --> NixOsContainer : configure image
+        }
+
+        UsbZigbeeDocker --> UsbZigbeeVm : passthrough
+    }
+
+    database "Shared Storage" as storage <<MixedManaged>> {
+        folder "/mnt/data" as data
+        folder "Config Sync" as ConfigSync
+    }
+
+    HaOs --> data : Persistent data
+    NixOsContainer --> ConfigSync : Configuration sync
+    data <--> ConfigSync : Bidirectional sync
+}
+
+' ' ========== CONNECTIONS ==========
+
+' @salt to @terra deployments
+HomeServerBootstrap ..> Tos__Nix : deploy (bootstrap)
+SaltNix ..> Tos__Nix : deploy (deploy-rs to change config)
+HomeServerBootstrap ..> Docker : deploy (bootstrap)
+
+' Infrastructure as Code flows
+Admin --> NixFlake : writes code
+NixFlake ..> AnsiblePlaybooks : generates
+NixFlake ..> Dockerfile : generates (optional)
+NixFlake ..> HomeServerBootstrap : provides configs
+GitRepo --> NixFlake : version control
+
+' Deployment connections
+DeployRs ..> NixManagedConfigs : deploys TOS configuration
+DeployRs ..> NixOs : deploys @potato system configuration
+
+' STYLE: Should be in separate use-case diagram with proper cases.
+User -down-> Terra : change settings in UI
+
+' Internal @terra connections
+HaVm --> CustomAddons : optional integration
+HaVm --> CustomIntegrations : optional integration
+ExternalDocker -[hidden]right- HaOs
+
+' Storage connections
+Ha_config -- storage
+
+@enduml

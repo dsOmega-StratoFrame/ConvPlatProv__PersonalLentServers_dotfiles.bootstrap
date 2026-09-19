@@ -1,0 +1,15 @@
+---
+# Resolve the OS-specific variable file. Falls back gracefully so an
+# unknown/renamed distribution does not abort the run.
+- name: Gather OS-specific variables
+  ansible.builtin.include_vars:
+    file: "{{ lookup('first_found', bootstrap_base_var_candidates) }}"
+  vars:
+    bootstrap_base_var_candidates:
+      files:
+        - "{{ ansible_distribution }}-{{ ansible_distribution_major_version }}.yml"
+        - "{{ ansible_distribution }}-family.yml"
+        - "{{ ansible_os_family }}-family.yml"
+        - default.yml
+      paths:
+        - "{{ role_path }}/vars"

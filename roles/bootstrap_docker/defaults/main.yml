@@ -1,0 +1,26 @@
+---
+# Detect the Docker shipped with TOS 6 and only install it when missing.
+#
+# install_method:
+#   detect - verify existing Docker; if missing, install Docker CE via apt
+#   apt    - always ensure Docker CE from the upstream apt repository
+#   manual - verify existing Docker; if missing, fail with App Center guidance
+bootstrap_docker_install_method: "detect"
+bootstrap_docker_manage_daemon: true
+bootstrap_docker_add_user_to_group: true
+bootstrap_docker_user: "{{ ansible_user | default(lookup('env', 'USER')) }}"
+bootstrap_docker_managed_by_us: false
+
+# TOS 6 ships an Ubuntu-22.04-compatible rootfs, hence the "jammy" suite.
+bootstrap_docker_apt_suite: "jammy"
+bootstrap_docker_apt_arch: "amd64"
+bootstrap_docker_apt_channel: "stable"
+bootstrap_docker_apt_base_url: "https://download.docker.com/linux/ubuntu"
+bootstrap_docker_gpg_url: "{{ bootstrap_docker_apt_base_url }}/gpg"
+bootstrap_docker_gpg_path: "/etc/apt/keyrings/docker.asc"
+bootstrap_docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin

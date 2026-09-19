@@ -1,0 +1,6 @@
+---
+- name: Load OS-specific variables
+  import_tasks: variables.yml
+
+- name: Install OS-specific dependencies
+  import_tasks: dependencies.yml

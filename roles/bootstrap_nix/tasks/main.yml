@@ -1,0 +1,48 @@
+---
+- name: Check whether Nix is already installed
+  ansible.builtin.command: "command -v nix"
+  register: bootstrap_nix_command
+  changed_when: false
+  failed_when: false
+
+- name: Install Nix (multi-user, systemd)
+  ansible.builtin.include_role:
+    name: danielrolls.nix
+  vars:
+    nix_version: "{{ bootstrap_nix_version | default(omit, true) }}"
+    installer_checksum: "{{ bootstrap_nix_installer_checksum | default(omit, true) }}"
+    flakes: "{{ bootstrap_nix_flakes }}"
+    remove_nix_directory: "{{ bootstrap_nix_remove_nix_directory }}"
+    config: "{{ bootstrap_nix_config | default(omit, true) }}"
+    nix_commands: "{{ bootstrap_nix_commands }}"
+  when: bootstrap_nix_command.rc != 0 or bootstrap_nix_force_reinstall
+
+- name: Ensure /etc/nix/nix.conf exists
+  ansible.builtin.copy:
+    content: ""
+    dest: /etc/nix/nix.conf
+    force: false
+    mode: "0644"
+
+- name: Enable nix-command and flakes
+  ansible.builtin.lineinfile:
+    path: /etc/nix/nix.conf
+    regexp: '^experimental-features\s*='
+    line: "experimental-features = {{ bootstrap_nix_experimental_features }}"
+    state: present
+
+- name: Declare trusted users
+  ansible.builtin.lineinfile:
+    path: /etc/nix/nix.conf
+    regexp: '^trusted-users\s*='
+    line: "trusted-users = {{ bootstrap_nix_trusted_users }}"
+    state: present
+
+- name: Verify Nix is available
+  ansible.builtin.command: "nix --version"
+  register: bootstrap_nix_version_check
+  changed_when: false
+
+- name: Report the installed Nix version
+  ansible.builtin.debug:
+    msg: "Nix installed on {{ inventory_hostname }}: {{ bootstrap_nix_version_check.stdout }}"

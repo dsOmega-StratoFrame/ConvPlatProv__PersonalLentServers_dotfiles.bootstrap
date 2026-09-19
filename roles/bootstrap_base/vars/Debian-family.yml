@@ -1,0 +1,6 @@
+---
+bootstrap_base_packages:
+  - curl
+  - xz-utils
+  - git
+  - jq

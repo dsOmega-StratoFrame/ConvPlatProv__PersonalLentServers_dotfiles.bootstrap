@@ -1,0 +1,42 @@
+---
+- name: Detect required commands
+  ansible.builtin.command: "command -v {{ item }}"
+  loop: "{{ bootstrap_base_required_commands }}"
+  register: bootstrap_base_command_checks
+  changed_when: false
+  failed_when: false
+
+- name: Record missing commands
+  ansible.builtin.set_fact:
+    bootstrap_base_missing_commands: "{{ bootstrap_base_command_checks.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}"
+
+- name: Install base packages (Debian family)
+  ansible.builtin.apt:
+    name: "{{ bootstrap_base_packages }}"
+    state: present
+    update_cache: true
+  when:
+    - bootstrap_base_manage_packages
+    - bootstrap_base_missing_commands | length > 0
+    - ansible_os_family == 'Debian'
+
+- name: Install base packages (generic)
+  ansible.builtin.package:
+    name: "{{ bootstrap_base_packages }}"
+    state: present
+  when:
+    - bootstrap_base_manage_packages
+    - bootstrap_base_missing_commands | length > 0
+    - ansible_os_family != 'Debian'
+
+- name: Fail when prerequisites are missing on an unsupported OS family
+  ansible.builtin.fail:
+    msg: >-
+      Missing required commands {{ bootstrap_base_missing_commands | join(', ') }}
+      on {{ inventory_hostname }} and the OS family
+      '{{ ansible_os_family }}' is not handled automatically. Install them
+      manually or disable bootstrap_base_manage_packages.
+  when:
+    - bootstrap_base_manage_packages
+    - bootstrap_base_missing_commands | length > 0
+    - ansible_os_family != 'Debian'

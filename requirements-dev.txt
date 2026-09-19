@@ -1,0 +1,11 @@
+# Development / test dependencies for this repository.
+#
+#   pip install -r requirements-dev.txt
+#
+# Unit tests (tests/unit) need pytest + pyyaml + jinja2 and do NOT need Ansible.
+# Integration tests (tests/integration) additionally need Docker + docker compose
+# and (for password-based first contact) sshpass.
+pytest>=8,<9
+PyYAML>=6
+Jinja2>=3
+ansible-lint>=24

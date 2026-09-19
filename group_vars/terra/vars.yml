@@ -1,0 +1,42 @@
+---
+# @terra — TerraMaster NAS. TOS 6 ships an Ubuntu-22.04-compatible rootfs with
+# systemd; the first account created in TOS is a superuser.
+#
+# Prerequisites on the device before the first run:
+#   * storage pool configured
+#   * SSH enabled (Control Panel -> Network Services -> Terminal & SNMP)
+#   * an admin account created (here: "terra")
+#
+# The vault (group_vars/terra/vault) must define:
+#   vault_terra_admin_password
+ansible_host: "terra"
+ansible_user: "terra"
+ansible_connection: ssh
+ansible_become: true
+ansible_become_method: sudo
+ansible_become_password: "{{ vault_terra_admin_password | default(omit) }}"
+# Password auth is used only until access_ssh has installed the key. It requires
+# sshpass on the control node.
+ansible_password: "{{ vault_terra_admin_password | default(omit) }}"
+ansible_ssh_private_key_file: "{{ deploy_ssh_private_key_file }}"
+
+# Single deployment keypair, generated on the control node by access_ssh and
+# uploaded to the target by the same role.
+deploy_ssh_private_key_file: "~/.ssh/terra_bootstrap"
+
+# access_ssh — password only needed until key access is in place.
+access_ssh_password: "{{ vault_terra_admin_password | default('') }}"
+
+# backup_tos
+backup_tos_local_dir: "{{ playbook_dir }}/backups"
+
+# bootstrap_nix — leave empty to use the version tested by the galaxy role.
+bootstrap_nix_version: ""
+bootstrap_nix_installer_checksum: ""
+bootstrap_nix_flakes: true
+bootstrap_nix_trusted_users: "root terra"
+
+# bootstrap_docker — detect the TOS-provided Docker, install CE only if missing.
+bootstrap_docker_install_method: "detect"
+bootstrap_docker_apt_suite: "jammy"
+bootstrap_docker_user: "terra"

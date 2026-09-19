@@ -1,0 +1,31 @@
+---
+# Integration test: run the Layer-0 roles against the mock @terra container.
+#
+# This playbook lives under tests/integration/, so the real group_vars/terra is
+# not loaded; all mock-specific values are set here. Roles are resolved through
+# ANSIBLE_ROLES_PATH (see the Makefile targets).
+- name: Integration test — bootstrap the mock @terra
+  hosts: terra
+  gather_facts: true
+  become: true
+  vars:
+    access_ssh_user: "terra"
+    access_ssh_password: "terra"
+    access_ssh_private_key_file: "{{ lookup('env', 'HOME') }}/.ssh/terra_integration"
+    ansible_ssh_private_key_file: "{{ lookup('env', 'HOME') }}/.ssh/terra_integration"
+    backup_tos_local_dir: "{{ playbook_dir }}/../artifacts"
+    bootstrap_docker_install_method: "detect"
+    bootstrap_nix_extra_config:
+      # Containers cannot sandbox Nix builds.
+      sandbox: false
+  roles:
+    - role: backup_tos
+      tags: [backup]
+    - role: access_ssh
+      tags: [access]
+    - role: bootstrap_base
+      tags: [base]
+    - role: bootstrap_nix
+      tags: [nix]
+    - role: bootstrap_docker
+      tags: [docker]

@@ -1,0 +1,70 @@
+---
+- name: Show the host we are establishing access to
+  ansible.builtin.debug:
+    msg: "Establishing SSH access to {{ inventory_hostname }} as {{ access_ssh_user }}"
+
+- name: Generate the deployment SSH keypair on the control node (if missing)
+  ansible.builtin.command:
+    cmd: >-
+      ssh-keygen -t {{ access_ssh_key_type }} -N ''
+      -f {{ access_ssh_private_key_file | expanduser }}
+      -C {{ access_ssh_key_comment }}
+    creates: "{{ access_ssh_private_key_file | expanduser }}"
+  delegate_to: localhost
+  become: false
+  when: access_ssh_generate_key
+
+- name: Check whether key-based SSH already works
+  ansible.builtin.command:
+    cmd: >-
+      ssh -i {{ access_ssh_private_key_file }}
+      -o BatchMode=yes
+      -o StrictHostKeyChecking={{ access_ssh_strict_host_key_checking }}
+      {{ access_ssh_port_arg }}
+      {{ access_ssh_user }}@{{ access_ssh_connect_host }} 'echo OK'
+  delegate_to: localhost
+  become: false
+  register: access_ssh_key_check
+  changed_when: false
+  failed_when: false
+
+- name: Upload the public key using the account password
+  ansible.builtin.authorized_key:
+    user: "{{ access_ssh_user }}"
+    state: present
+    key: "{{ access_ssh_public_key }}"
+  delegate_to: "{{ inventory_hostname }}"
+  vars:
+    ansible_user: "{{ access_ssh_user }}"
+    ansible_ssh_pass: "{{ access_ssh_password }}"
+    ansible_ssh_common_args: "-o StrictHostKeyChecking={{ access_ssh_strict_host_key_checking }}"
+  when:
+    - access_ssh_key_check.rc != 0
+    - access_ssh_password | length > 0
+  register: access_ssh_key_upload
+
+- name: Fail when neither key nor password access is available
+  ansible.builtin.fail:
+    msg: >-
+      Cannot authenticate to {{ inventory_hostname }} as {{ access_ssh_user }}:
+      key check failed and no access_ssh_password was provided. Set the password
+      in the host vault or pre-install the public key.
+  when:
+    - access_ssh_key_check.rc != 0
+    - access_ssh_password | length == 0
+
+- name: Verify SSH access via key
+  ansible.builtin.command:
+    cmd: >-
+      ssh -i {{ access_ssh_private_key_file }}
+      -o BatchMode=yes
+      -o StrictHostKeyChecking={{ access_ssh_strict_host_key_checking }}
+      {{ access_ssh_port_arg }}
+      {{ access_ssh_user }}@{{ access_ssh_connect_host }} 'echo OK'
+  delegate_to: localhost
+  become: false
+  register: access_ssh_verify
+  changed_when: false
+  retries: "{{ access_ssh_connect_retries }}"
+  delay: "{{ access_ssh_connect_delay }}"
+  until: access_ssh_verify.rc == 0

@@ -1,0 +1,4 @@
+# Manual testing for the Docker bootstrap step (role: bootstrap_docker).
+# See Makefile.Steps for the target list and INVENTORY selection.
+STEP_TAGS := docker
+include Makefile.Steps
