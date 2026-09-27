@@ -63,8 +63,8 @@ The deployment decomposes into small roles, each a single concern:
 | Role | Responsibility |
 |---|---|
 | `backup_tos` | snapshot TOS config |
-| `access_ssh` | establish key-based SSH |
-| `bootstrap_base` | minimal prerequisites + control-node keypair |
+| `access_ssh` | establish key-based SSH (generate/upload the deployment keypair) |
+| `bootstrap_base` | minimal base prerequisites |
 | `bootstrap_nix` | Nix (multi-user) via the pinned galaxy role |
 | `bootstrap_docker` | detect/ensure Docker |
 

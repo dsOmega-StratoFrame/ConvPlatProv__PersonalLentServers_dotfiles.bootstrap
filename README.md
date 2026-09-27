@@ -27,11 +27,12 @@ The playbook runs these roles in order:
 
 1. **`backup_tos`** — snapshots the TOS system configuration and pulls the
    archive to `backups/<host>/` on the control node. This always runs first.
-2. **`access_ssh`** — uploads the deployment public key and verifies key-based
-   login (idempotent).
+2. **`access_ssh`** — generates the deployment keypair on the control node,
+   uploads its public key and verifies key-based login (idempotent). To reuse an
+   already-deployed key instead, see
+   [`docs/AccessSsh_ExistingKey.md`](./docs/AccessSsh_ExistingKey.md).
 3. **`bootstrap_base`** — installs only the commands the Nix installer needs
-   (`curl`, `xz`, …) if they are missing, and generates the deployment keypair
-   on the control node.
+   (`curl`, `xz`, …) if they are missing.
 4. **`bootstrap_nix`** — installs the Nix package manager (multi-user, systemd)
    via the pinned `danielrolls.nix` role and enables `nix-command` + `flakes`.
 5. **`bootstrap_docker`** — detects the Docker shipped with TOS 6 and only
@@ -49,10 +50,19 @@ Before the first run, on the NAS:
 
 ### Configure
 
-1. Point the inventory at the device. `hosts.ini` uses the hostname `terra`;
-   adjust `ansible_host` in `group_vars/terra/vars.yml` if it does not resolve.
-2. Create the host vault and set the admin password used for the very first
-   connection:
+1. Point the inventory at the device. `hosts.ini` uses the hostname
+   `terra-local`; the connection host comes from the inventory, so set
+   `ansible_host` in `group_vars/terra/vars.yml` only if that name does not
+   resolve from the control node.
+
+   Easiest way to check is to ssh to the host: `ssh terra@terra-local` (or `ssh
+   terra@terra` when the short name resolves). If you already have a key
+   deployed, see
+   [`docs/AccessSsh_ExistingKey.md`](./docs/AccessSsh_ExistingKey.md) for the
+   checks and the variables to reuse it.
+
+2. Create the host vault and set the admin password (used for sudo, and for the
+   very first password-based connection on a device with no key yet):
 
    ```sh
    make vault-edit-terra
@@ -60,8 +70,10 @@ Before the first run, on the NAS:
 
    Required variable:
 
-   - `vault_terra_admin_password` — the TOS admin password (also used for
-     `sudo`).
+   - vault_terra_admin_password — the TOS admin password (also used for
+     sudo; required even when SSH is key-based). If the password contains a
+     double quote ("), escape it with a backslash (\") or wrap the value in
+     single quotes.
 
 Review the other knobs in [`group_vars/terra/vars.yml`](./group_vars/terra/vars.yml).
 Role defaults (declarations) live in each role's `defaults/main.yml`.
@@ -150,7 +162,7 @@ roles/bootstrap_docker/         # Docker detection / install
 tests/                          # unit + integration tests (see tests/README.md)
 Makefile.Steps                  # shared manual-test targets
 Makefile.<Step>                 # per-step manual testing
-docs/                           # diagram, ADR, rollout plan
+docs/                           # diagram, ADR, rollout plan, existing-key guide
 ```
 
 ### Secrets
