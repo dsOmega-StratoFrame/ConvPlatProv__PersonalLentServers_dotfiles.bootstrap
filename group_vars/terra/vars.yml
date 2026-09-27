@@ -9,23 +9,31 @@
 #
 # The vault (group_vars/terra/vault) must define:
 #   vault_terra_admin_password
-ansible_host: "terra"
+# Connection host comes from the inventory (hosts.ini: terra-local); `ansible_host`
+# is intentionally not set. Add it only if the inventory name does not resolve
+# from the control node.
 ansible_user: "terra"
 ansible_connection: ssh
 ansible_become: true
 ansible_become_method: sudo
+# sudo still needs the TOS admin password even when SSH is key-based.
 ansible_become_password: "{{ vault_terra_admin_password | default(omit) }}"
-# Password auth is used only until access_ssh has installed the key. It requires
-# sshpass on the control node.
-ansible_password: "{{ vault_terra_admin_password | default(omit) }}"
+# SSH transport authenticates with the key below (or ssh-agent) — no password.
+# See docs/AccessSsh_ExistingKey.md.
 ansible_ssh_private_key_file: "{{ deploy_ssh_private_key_file }}"
+# First contact on a device with no key yet: uncomment this and install sshpass
+# on the control node (it also enables the access_ssh password upload path).
+# ansible_password: "{{ vault_terra_admin_password | default(omit) }}"
 
-# Single deployment keypair, generated on the control node by access_ssh and
-# uploaded to the target by the same role.
-deploy_ssh_private_key_file: "~/.ssh/terra_bootstrap"
+# Existing key already deployed in the account's authorized_keys. Used for both
+# the Ansible connection and the access_ssh checks. Generation is disabled so the
+# role never creates a new pair; see docs/AccessSsh_ExistingKey.md.
+deploy_ssh_private_key_file: "~/.ssh/Lent__terra-HomeServer__HomeAssistant-local"
 
-# access_ssh — password only needed until key access is in place.
-access_ssh_password: "{{ vault_terra_admin_password | default('') }}"
+# access_ssh — key access is pre-established, so the password upload path is
+# disabled and the role only verifies key login.
+access_ssh_password: ""
+access_ssh_generate_key: false # key already deployed
 
 # backup_tos
 backup_tos_local_dir: "{{ playbook_dir }}/backups"
