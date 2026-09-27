@@ -7,3 +7,9 @@ bootstrap_base_required_commands:
   - xz
 # Filled by the OS-specific vars file (roles/bootstrap_base/vars/*.yml).
 bootstrap_base_packages: []
+# CVE-2024-3094 (the xz backdoor) shipped in upstream xz 5.6.0 and 5.6.1.
+# Distro rebuilds report the reverted runtime version (Ubuntu's
+# 5.6.1+really5.4.5 runs as 5.4.5), so the guard gates on `xz --version`.
+bootstrap_base_xz_blocked_versions:
+  - "5.6.0"
+  - "5.6.1"

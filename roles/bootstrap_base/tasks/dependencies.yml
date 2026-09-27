@@ -40,3 +40,28 @@
     - bootstrap_base_manage_packages
     - bootstrap_base_missing_commands | length > 0
     - ansible_os_family != 'Debian'
+
+- name: Detect the installed xz version
+  ansible.builtin.command: "xz --version"
+  register: bootstrap_base_xz_version
+  changed_when: false
+  failed_when: false
+
+- name: Fail when xz is affected by CVE-2024-3094
+  ansible.builtin.fail:
+    msg: >-
+      xz on {{ inventory_hostname }} reports an affected version
+      ({{ bootstrap_base_xz_version.stdout | default('unknown', true) | replace('\n', ' ') }}):
+      the 5.6.0 / 5.6.1 releases carry the CVE-2024-3094 backdoor. Refusing to
+      continue. Install a fixed xz (>= 5.6.2, or a distro rebuild that reports
+      5.4.x / 5.2.x) and re-run.
+  when: >-
+    (bootstrap_base_xz_version.rc | default(1)) == 0
+    and (bootstrap_base_xz_blocked_versions
+         | select('in', bootstrap_base_xz_version.stdout)
+         | list | length > 0)
+
+- name: Report the xz version in use
+  ansible.builtin.debug:
+    msg: "xz on {{ inventory_hostname }}: {{ bootstrap_base_xz_version.stdout | default('not installed', true) | replace('\n', ' ') }}"
+  when: (bootstrap_base_xz_version.rc | default(1)) == 0

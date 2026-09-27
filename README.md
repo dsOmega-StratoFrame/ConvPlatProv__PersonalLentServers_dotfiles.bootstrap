@@ -32,11 +32,14 @@ The playbook runs these roles in order:
    already-deployed key instead, see
    [`docs/AccessSsh_ExistingKey.md`](./docs/AccessSsh_ExistingKey.md).
 3. **`bootstrap_base`** — installs only the commands the Nix installer needs
-   (`curl`, `xz`, …) if they are missing.
+   (`curl`, `xz`, …) if they are missing, and refuses to continue on xz versions
+   affected by CVE-2024-3094 (5.6.0 / 5.6.1).
 4. **`bootstrap_nix`** — installs the Nix package manager (multi-user, systemd)
    via the pinned `danielrolls.nix` role and enables `nix-command` + `flakes`.
 5. **`bootstrap_docker`** — detects the Docker shipped with TOS 6 and only
-   installs Docker CE (Ubuntu `jammy` repo) when it is missing.
+   installs Docker CE (Ubuntu `jammy` repo) when it is missing. This is a
+   host-side fallback for the NAS rootfs and is independent of the NixOS
+   system-container image, which is imported as a prebuilt tar.
 
 ### Prerequisites on `@terra`
 
