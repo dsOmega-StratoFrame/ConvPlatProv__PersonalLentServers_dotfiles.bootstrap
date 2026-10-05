@@ -15,3 +15,13 @@ nixos_image_artifact_checksum_algorithm: "sha256"
 nixos_image_artifact_tag_length: 12
 # The repository the content tag is applied to. Shared with the container role.
 nixos_image_artifact_image_repository: "{{ nixos_image_repository | default('ds-omega/nikolai-gogol') }}"
+
+# Canonical content-tag derivation, shared with the build-side repos
+# (Unix_dotfiles, @NikolaiGogol) so local testing matches this deploy. Runs on
+# the control node (this role is `delegate_to: localhost`); nothing is sent to
+# @terra. `invoke` is provided by this repo's dev shell (`nix develop .`).
+nixos_image_artifact_content_tag_command: "invoke --search-root={{ lookup('env', 'HOME') }}/.bookmarks/shared-scripts conv-plat-prov.content-tag"
+# Production (group_vars) sets this true: a missing/failing shared command is
+# then fatal. The default stays false so tests remain hermetic and fall back to
+# the built-in sha256 slice.
+nixos_image_artifact_content_tag_required: false

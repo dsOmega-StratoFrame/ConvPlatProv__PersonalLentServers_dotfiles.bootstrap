@@ -91,9 +91,11 @@
 | Command | Result |
 |---|---|
 | `nix shell … python3.withPackages [pytest pyyaml jinja2] --command python3 -m pytest tests/unit -q` | **52 passed** |
-| `nix develop path:. --command make unit` | **52 passed** |
-| `nix develop path:. --command make check` (4 playbooks `--syntax-check`) | **exit 0, all four clean** |
-| `nix develop path:. --command ansible-lint` (`make lint`) | **0 failures, 0 warnings** (production profile) |
+| `nix develop . --command make unit` | **57 passed** (52 + 5 tag-parity tests) |
+| `nix develop . --command make check` (4 playbooks `--syntax-check`) | **exit 0, all four clean** |
+| `nix develop . --command make lint` (ansible-lint) | **0 failures, 0 warnings** (production profile) |
+| localhost role run with the fixture (`content_tag_required: true`) | **ok=8, failed=0**; tag `ecfcf1d2a1e3`, image `ds-omega/nikolai-gogol:ecfcf1d2a1e3` |
+| localhost role run with `content_tag_command=/nonexistent/...`, required=true | **fails with the intended guard (rc=2)** |
 | `python3` YAML parse of all `**/*.yml`/`*.yaml` | **OK** |
 | heuristic undefined-`nixos_*` scan (tasks/playbooks/templates) | no real undefined refs (only role names / `_*` doc text) |
 
@@ -109,6 +111,55 @@
   order/tags, roles exist + namespaced defaults, `ansible.posix` declared.
 - Integration wiring added but **not executed** (no Docker/rsync in this
   container).
+
+## 6a. Development shell (flake) — added in a follow-up build task
+
+A repo `flake.nix` + `flake.lock` was added by the `nix-build` worker so the
+repo's gates are runnable without host tooling. Its full manifest is
+`.agents/build-result-flake-devshell-2026-09-27.md`.
+
+- `devShells.default` (x86_64-linux; aarch64-darwin also evaluates) provides
+  `python3` + `pytest`/`PyYAML`/`Jinja2`, `ansible-core 2.20.0`,
+  `ansible-lint 25.8.2`, and the pinned `community.docker 5.0.5` /
+  `ansible.posix 2.1.0` collections via `ANSIBLE_COLLECTIONS_PATH`.
+- `nixpkgs` pinned to `bcc4a9d9533c033d806a46b37dc444f9b0da49dd` (nixos-26.05).
+- `.envrc` keeps `dotenv ./.env.dev` and adds `use flake`; `.direnv/` gitignored.
+- Docker is intentionally not provided (`make it-*`/`e2e` stay host-dependent).
+- Usage: `nix develop .` (after the flake files are tracked); otherwise
+  `nix develop path:.`.
+
+## 6b. Tag-parity extension (follow-up build task)
+
+Follow-up request: "support such tag creation at the NikolaiGogol repo, so local
+testing matches remote." The content-addressable rule (sha256(tarball)[:12])
+previously lived in the Ansible role only; it is now derived by **one shared
+command** so the build side and the deploy side cannot drift:
+
+`invoke --search-root=~/.bookmarks/shared-scripts conv-plat-prov.content-tag <tarball>`
+
+- **Shared task (separate repo):** `~/.bookmarks/shared-scripts/conv_plat_prov.py`
+  gained `compute_content_tag()` (streaming sha256) and an `@task content_tag`
+  (namespace `conv-plat-prov.content-tag`; `conv_plat_prov` is already in that
+  repo's `tasks.py` collection). No new file needed there.
+- **Unix_dotfiles:** `Makefile.ConvPlatProv-docker` gained `image-tag-<machine>`
+  and `tarball-<machine>` targets using the shared command.
+- **`@NikolaiGogol` repo:** `Makefile` computes `IMAGE_TAG` from the tarball via
+  the shared command, exports `IMAGE_TAG`/`IMAGE_NAME` for compose, and
+  `import-nixos` imports the content tag then tags a `:latest` alias (user
+  choice); `.env.example` documents `IMAGE_TAG=latest` as a fallback only.
+- **This repo:** `roles/nixos_image_artifact` runs the shared command on the
+  control node (`delegate_to: localhost` — nothing is sent to `@terra`), asserts
+  its output equals the artifact sha256 slice, and uses it as the tag. New
+  defaults `nixos_image_artifact_content_tag_command` /
+  `nixos_image_artifact_content_tag_required` (default false; `group_vars` sets
+  true). `flake.nix` dev shell adds `invoke`.
+- **Tests:** `tests/unit/test_nixos_image_step.py` gained 5 tests, including
+  `test_shared_content_tag_command_matches_fixture` (runs the shared command on
+  the fixture and asserts `ecfcf1d2a1e3`).
+
+Scope note: this edits two non-deployment repos (Unix_dotfiles, `@NikolaiGogol`)
+and shared-scripts, per explicit user approval ("Both repos" / "Add to
+conv_plat_prov.py"). No commits were made in any repo.
 
 ## 7. Deviations (need reviewer attention)
 
@@ -135,6 +186,14 @@
    `edge_sync` tag (self-gated off). This is a small structural choice (vs a
    separate playbook) to avoid an extra playbook; it never runs for
    `image,container`.
+7. **Fixed all ansible-lint findings so `make lint` is green.** Three were in the
+   new role (`nixos_image_artifact`: Jinja spacing + a >160-char line). Five were
+   pre-existing and fixed without behaviour change: FQCN for
+   `ansible.posix.authorized_key` and `ansible.builtin.import_tasks`, plus
+   justified `# noqa: command-instead-of-module` annotations on the `tar`
+   archive-creation (`backup_tos`) and `systemctl is-active` probe
+   (`verify-terra.yml`) tasks. This touched two pre-existing files beyond the
+   plan's list, to satisfy the plan's `make lint` clean criterion.
 
 ## 8. Unresolved issues / confirm on first live run
 
@@ -172,8 +231,13 @@ New risks discovered during build:
 
 ## 11. Handoff
 
-- **Files/interfaces changed:** see §3–§4.
-- **Evidence:** 52/52 unit tests; YAML parse OK; undefined-var scan clean;
-  syntax-check/lint and integration/E2E outstanding.
+- **Files/interfaces changed:** see §3–§4, plus the flake dev shell in §6a.
+- **Evidence:** 57/57 unit tests (incl. shared-command fixture parity);
+  `make check` clean on all four playbooks; `make lint` 0 failures/0 warnings
+  (production profile); a localhost role run on the fixture produced tag
+  `ecfcf1d2a1e3` / image `ds-omega/nikolai-gogol:ecfcf1d2a1e3` and the
+  required-command guard fired as intended. Integration/E2E still outstanding
+  (need Docker + the real NAS).
 - **Not verified.** Next: Reporter turns this into a report; Verifier checks
-  acceptance (needs ansible + Docker to complete).
+  acceptance (needs Docker + SSH to `@terra` to complete the integration/E2E
+  layers).

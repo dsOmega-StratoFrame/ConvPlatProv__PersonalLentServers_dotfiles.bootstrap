@@ -8,6 +8,8 @@ Companion documents:
 - system relationships: [`Deploy#NixContainer.puml`](./Deploy#NixContainer.puml)
 - Ansible architecture decisions:
   [`adr/0001-HomeServer__HomeAssistant.md`](./adr/0001-HomeServer__HomeAssistant.md)
+- Cross-repo image-tag contract:
+  [`adr/0002-ContentAddressableImageTag.md`](./adr/0002-ContentAddressableImageTag.md)
 
 ## 1. Inputs & pinned revisions
 
@@ -95,8 +97,9 @@ debugging.
 - `deploy-nikolaigogol.yml` (targets `terra`, pulls in `group_vars/nikolaigogol`
   via `vars_files`) implements the full path from the workstation build to a
   running privileged systemd container:
-  - `image` tag — `nixos_image_artifact` (locate + sha256 + 12-hex content tag on
-    the control node), `nixos_image_sync` (rsync `--checksum` to
+  - `image` tag — `nixos_image_artifact` (locate + sha256 + 12-hex content tag
+    derived via the shared command `conv-plat-prov.content-tag` on the control
+    node; see ADR 0002), `nixos_image_sync` (rsync `--checksum` to
     `/var/tmp/nixos-images/<sha256>.tar.xz`), `nixos_image_load`
     (`docker import`, gated on `docker image inspect`).
   - `container` tag — `nixos_container` renders `docker-compose-system.yml` +
@@ -106,8 +109,9 @@ debugging.
   - `edge_sync` tag — optional, off-by-default helper (`nixos_edge_sync`).
 - `verify-nikolaigogol.yml` checks the image, the running container and
   `nixos-version` inside it.
-- **Tests:** unit — `tests/unit/test_nixos_image_step.py` (tag derivation, no
-  moving tags, compose/env render invariants, sync/load defaults);
+- **Tests:** unit — `tests/unit/test_nixos_image_step.py` (tag derivation incl.
+  shared-command ↔ fixture parity, no moving tags, compose/env render
+  invariants, sync/load defaults);
   structure — `test_repo_structure.py` now validates the Layer-1 playbook;
   integration — `tests/integration/playbook.yml` runs `TAGS=image` and
   `TAGS=container` against the mock (import/compose skipped without a daemon);

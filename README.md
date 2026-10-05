@@ -25,8 +25,9 @@ and the rollout plan in
 
 The playbook runs these roles in order:
 
-1. **`backup_tos`** — snapshots the TOS system configuration and pulls the
-   archive to `backups/<host>/` on the control node. This always runs first.
+1. **`backup_tos`** — snapshots the whole `/etc` configuration (plus a separate
+   credentials archive and in-archive DB dumps) and pulls it to
+   `backups/<host>/` on the control node. This always runs first.
 2. **`access_ssh`** — generates the deployment keypair on the control node,
    uploads its public key and verifies key-based login (idempotent). To reuse an
    already-deployed key instead, see
@@ -117,16 +118,17 @@ A pinned dev shell provides the test/lint tooling without depending on the host:
 
 ```sh
 nix develop .            # or `nix develop path:.` before flake.nix is committed
-make unit                # 52 unit tests
+make unit                # 57 unit tests
 make check               # syntax-check all four playbooks
 make lint                # ansible-lint
 ```
 
 It pins nixpkgs through `flake.lock` and bundles Python 3.13 with
-pytest/PyYAML/Jinja2, `ansible-core`, `ansible-lint`, and the `ansible.posix` /
-`community.docker` collections. Docker is intentionally not provided, so the
-`make it-*` and `make e2e` targets still need a Docker host; `ansible-lint`
-fetches the external `danielrolls.nix` role (git + network) on first run.
+pytest/PyYAML/Jinja2, `ansible-core`, `ansible-lint`, `invoke` (the shared
+content-tag command, below), and the `ansible.posix` / `community.docker`
+collections. Docker is intentionally not provided, so the `make it-*` and
+`make e2e` targets still need a Docker host; `ansible-lint` fetches the external
+`danielrolls.nix` role (git + network) on first run.
 
 To exercise the roles without touching the NAS, run them against a mock `@terra`
 (Ubuntu-22.04 systemd container):
@@ -162,10 +164,21 @@ privileged systemd container (the same container
 
 It is content-addressed: the image tag is the first 12 hex characters of the
 tarball's sha256, so "is this image present?" is meaningful and a re-run is a
-no-op when nothing changed. Roles, in order, by tag:
+no-op when nothing changed.
+
+**Tag parity with local testing.** The tag is produced by one shared command —
+`invoke --search-root=~/.bookmarks/shared-scripts conv-plat-prov.content-tag` —
+so this deploy, `Unix_dotfiles` (`make image-tag-NikolaiGogol`) and the
+`@NikolaiGogol` repo (`make import-nixos`, which also keeps a `:latest` alias)
+compute the same tag; the role asserts its result equals the artifact checksum
+slice. `invoke` is provided by the dev shell, and real deploys require it
+(`nixos_image_artifact_content_tag_required: true` in `group_vars`).
+
+Roles, in order, by tag:
 
 - `image` — `nixos_image_artifact` (locate + checksum the artifact on the
-  control node) → `nixos_image_sync` (rsync `--checksum` to
+  control node; derive the tag via the shared command) → `nixos_image_sync`
+  (rsync `--checksum` to
   `/var/tmp/nixos-images/<sha256>.tar.xz`) → `nixos_image_load` (`docker import`
   gated on `docker image inspect`).
 - `container` — `nixos_container` (render `docker-compose-system.yml` + `.env`
@@ -232,11 +245,21 @@ for the full plan, testing matrix and rollback.
 
 ### Backups
 
-`backup_tos` writes a timestamped archive and manifest under
-`backups/<host>/` (git-ignored). It is a *configuration* backup — system files
-such as `/etc/fstab`, `mdadm` config, network config and systemd units — not a
-block-level image of the TOS system disk. For risky changes, pair it with
-TerraMaster's own configuration export.
+`backup_tos` runs first and snapshots the **whole `/etc` tree** (anchored vendor
+excludes, `--one-file-system`) into a timestamped config archive under
+`backups/<host>/`. Out-of-`/etc` extras (cron, Samba private), in-archive
+database dumps (PostgreSQL logical dump on port `5032`, SQLite `.backup`
+snapshots) and the enabled systemd-unit state are folded in, and a manifest with
+checksums and member counts is written next to the archive.
+
+Credential material (shadow/gshadow, SSH host keys, TLS private keys, Samba
+secrets) is captured into a **separate** `<host>-tos-secrets-<ts>.tar.gz` under
+`backups/<host>/secrets/` (`0700` directory, `0600` files), gated by
+`backup_tos_include_secrets`. This is a *configuration* backup, not a block-level
+image: `/Volume1` state data is **out of scope**. `@Manilov` (HAOS VM) is still
+roadmap, so its state is not covered by this role either. For risky changes pair
+it with TerraMaster's own configuration export; `backups/` is git-ignored and
+must never be committed.
 
 ### Inner hosts (roadmap)
 

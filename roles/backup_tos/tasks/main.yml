@@ -1,38 +1,249 @@
 ---
+# TOS configuration backup (ADR-TOS-BACKUP-001 R2).
+#
+# Pipeline: identity -> staging -> submounts -> excludes -> extras -> DB dumps
+# -> enable-state -> config archive -> secrets archive -> local dirs -> fetch ->
+# verify -> manifest -> cleanup -> report.
+#
+# Fail-closed: every capture/verify step aborts on genuine tool failure. Only
+# `tar` is allowed rc 0/1 (files-changed warnings); rc 2 aborts.
+
 - name: Record system identity for the backup manifest
-  ansible.builtin.command: "uname -a"
+  ansible.builtin.command:
+    cmd: uname -a
   register: backup_tos_uname
   changed_when: false
   failed_when: false
 
-# `tar` is used to *create* an archive with --ignore-failed-read; the unarchive
-# module only extracts, so it does not apply here.
-- name: Create the TOS configuration archive  # noqa: command-instead-of-module
-  ansible.builtin.command:
-    cmd: >-
-      tar --ignore-failed-read --warning=no-file-changed
-      -czf {{ backup_tos_archive }}
-      {% for pattern in backup_tos_excludes %}--exclude={{ pattern }} {% endfor %}
-      {{ backup_tos_paths | join(' ') }}
-  register: backup_tos_archive_result
-  changed_when: true
-  failed_when: backup_tos_archive_result.rc not in [0, 1, 2]
-
-- name: Ensure the local backup directory exists
+- name: Create the remote staging directory
   ansible.builtin.file:
-    path: "{{ backup_tos_local_dir }}/{{ inventory_hostname }}"
+    path: "{{ backup_tos_staging_dir }}"
     state: directory
     mode: "0700"
+
+- name: Scan for submounts below the backup scope  # noqa: risky-shell-pipe
+  ansible.builtin.shell:
+    cmd: |
+      if command -v findmnt >/dev/null 2>&1; then
+        findmnt -rno TARGET
+      else
+        mount | awk '{print $3}'
+      fi | awk '$0 ~ "^/etc/." {print}'
+  args:
+    executable: /bin/sh
+  register: backup_tos_submounts
+  changed_when: false
+  failed_when: false
+
+# Effective exclude file: anchored vendor + dead + postgres patterns, then the
+# scanned submounts, then (only when secrets are not kept separately) the
+# normalised secret paths. Kept as a rendered template so the gating is testable.
+- name: Build the effective exclude file
+  ansible.builtin.copy:
+    dest: "{{ backup_tos_staging_dir }}/excludes.txt"
+    mode: "0600"
+    content: |
+      {% for pattern in backup_tos_vendor_excludes + backup_tos_dead_excludes + [backup_tos_postgres_exclude] -%}
+      {{ pattern }}
+      {% endfor -%}
+      {% for mount in backup_tos_submounts.stdout_lines | default([]) -%}
+      {{ './' ~ mount[5:] }}
+      {% endfor -%}
+      {% if not backup_tos_include_secrets -%}
+      {% for secret in backup_tos_secret_paths -%}
+      {{ ('./' ~ secret[5:]) if secret.startswith('/etc/') else (('extras' ~ secret) if secret.startswith('/') else ('./' ~ secret)) }}
+      {% endfor -%}
+      {% endif -%}
+  changed_when: false
+
+- name: Read the effective exclude file for the manifest
+  ansible.builtin.slurp:
+    src: "{{ backup_tos_staging_dir }}/excludes.txt"
+  register: backup_tos_excludes_raw
+  changed_when: false
+
+# Stage via tar, not `cp -a`: an unreadable leaf below an extra (e.g. TOS's
+# /var/spool/cron/crontabs, mode 0700 root:crontab behind root_squash on the
+# NAS) must be skipped and recorded, not abort the whole backup. This mirrors
+# the `--ignore-failed-read` tolerance of the config archive below; a genuine
+# tar failure (rc 2) still aborts under `set -e -o pipefail`. Paths keep their
+# absolute hierarchy under extras/ (`extras/var/spool/cron/...`) so the same
+# exclude patterns apply.
+- name: Stage the out-of-scope extras  # noqa: command-instead-of-module
+  ansible.builtin.shell:
+    cmd: |
+      set -e -o pipefail
+      dest="{{ backup_tos_staging_dir }}/extras"
+      mkdir -p "$dest"
+      for path in {{ backup_tos_extra_paths | map('quote') | join(' ') }}; do
+        if [ -e "$path" ]; then
+          tar -C / --ignore-failed-read --warning=no-file-changed \
+            -cf - "${path#/}" | tar -C "$dest" -xf -
+        fi
+      done
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Dump the PostgreSQL databases on the TOS port
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      mkdir -p "{{ backup_tos_staging_dir }}/db/postgresql"
+      {% if backup_tos_postgres_dumpall %}
+      pg_dumpall -p {{ backup_tos_postgres_port }} -U postgres \
+        > "{{ backup_tos_staging_dir }}/db/postgresql/dumpall.sql"
+      {% else %}
+      for db in $(psql -p {{ backup_tos_postgres_port }} -U postgres -Atc \
+          "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate"); do
+        pg_dump -p {{ backup_tos_postgres_port }} -U postgres "$db" \
+          > "{{ backup_tos_staging_dir }}/db/postgresql/${db}.sql"
+      done
+      {% endif %}
+  args:
+    executable: /bin/bash
+  register: backup_tos_postgres_result
+  changed_when: true
+
+- name: Back up the SQLite databases with the online .backup API
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      mkdir -p "{{ backup_tos_staging_dir }}/db/sqlite"
+      {% for db in backup_tos_sqlite_dbs %}
+      if [ -f "{{ db }}" ]; then
+        sqlite3 -readonly "{{ db }}" ".backup '{{ backup_tos_staging_dir }}/db/sqlite/{{ db | basename }}.backup'"
+      fi
+      {% endfor %}
+  args:
+    executable: /bin/bash
+  register: backup_tos_sqlite_result
+  changed_when: true
+
+- name: Capture the enabled systemd unit state
+  ansible.builtin.shell:
+    cmd: |
+      mkdir -p "{{ backup_tos_staging_dir }}/state"
+      set -o pipefail
+      systemctl list-unit-files --state=enabled \
+        | tee "{{ backup_tos_staging_dir }}/state/systemctl-enabled.txt"
+  args:
+    executable: /bin/bash
+  register: backup_tos_enable_state
+  changed_when: true
+
+- name: Create the TOS configuration archive (whole scope + staged extras)  # noqa: command-instead-of-module
+  ansible.builtin.shell:
+    cmd: >-
+      tar --anchored --ignore-failed-read --warning=no-file-changed
+      --exclude-from="{{ backup_tos_staging_dir }}/excludes.txt"
+      --one-file-system
+      -C {{ backup_tos_scope }} -czf {{ backup_tos_archive }} .
+      -C {{ backup_tos_staging_dir }} extras db state
+  args:
+    executable: /bin/bash
+  register: backup_tos_archive_result
+  changed_when: true
+  failed_when: backup_tos_archive_result.rc not in [0, 1]
+
+- name: Create the separate secrets archive  # noqa: command-instead-of-module
+  ansible.builtin.shell:
+    cmd: |
+      tar --ignore-failed-read --warning=no-file-changed \
+        -czf {{ backup_tos_secrets_archive }} \
+        {% for path in backup_tos_secret_paths %}{{ path }} {% endfor %}
+  args:
+    executable: /bin/bash
+  register: backup_tos_secrets_result
+  changed_when: true
+  failed_when: backup_tos_secrets_result.rc not in [0, 1]
+  when: backup_tos_include_secrets
+
+- name: Ensure the local backup directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0700"
+  loop:
+    - "{{ backup_tos_local_dir }}/{{ inventory_hostname }}"
+    - "{{ backup_tos_secrets_local_dir }}"
   delegate_to: localhost
   become: false
   when: backup_tos_fetch
 
-- name: Fetch the TOS configuration archive to the control node
+- name: Fetch the configuration archive to the control node
   ansible.builtin.fetch:
     src: "{{ backup_tos_archive }}"
     dest: "{{ backup_tos_local_dir }}/{{ inventory_hostname }}/"
     flat: true
   when: backup_tos_fetch
+
+- name: Fetch the secrets archive to the control node
+  ansible.builtin.fetch:
+    src: "{{ backup_tos_secrets_archive }}"
+    dest: "{{ backup_tos_secrets_local_dir }}/"
+    flat: true
+  when: backup_tos_fetch and backup_tos_include_secrets
+
+- name: Restrict the fetched archives to the owner
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "0600"
+  loop:
+    - "{{ backup_tos_local_dir }}/{{ inventory_hostname }}/{{ backup_tos_archive | basename }}"
+    - "{{ backup_tos_secrets_local_dir }}/{{ backup_tos_secrets_archive | basename }}"
+  delegate_to: localhost
+  become: false
+  when: backup_tos_fetch
+
+- name: Verify the configuration archive (gzip integrity + tar listing)
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      gzip -t "{{ backup_tos_archive }}"
+      tar -tzf "{{ backup_tos_archive }}" > /dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Verify the secrets archive (gzip integrity + tar listing)
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      gzip -t "{{ backup_tos_secrets_archive }}"
+      tar -tzf "{{ backup_tos_secrets_archive }}" > /dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: backup_tos_include_secrets
+
+- name: Check the configuration archive checksum
+  ansible.builtin.command:
+    cmd: sha256sum {{ backup_tos_archive }}
+  register: backup_tos_config_sha
+  changed_when: false
+
+- name: Stat the configuration archive
+  ansible.builtin.stat:
+    path: "{{ backup_tos_archive }}"
+  register: backup_tos_config_stat
+
+- name: Count the configuration archive members  # noqa: command-instead-of-module risky-shell-pipe
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      tar -tzf {{ backup_tos_archive }} | wc -l
+  args:
+    executable: /bin/bash
+  register: backup_tos_config_members
+  changed_when: false
+
+- name: Read the TOS config version when present
+  ansible.builtin.slurp:
+    src: /etc/tos/config/version
+  register: backup_tos_version_raw
+  changed_when: false
+  failed_when: false
 
 - name: Write a backup manifest next to the archive
   ansible.builtin.copy:
@@ -42,11 +253,39 @@
       timestamp: {{ backup_tos_timestamp }}
       uname: {{ backup_tos_uname.stdout | default('n/a') }}
       remote_archive: {{ backup_tos_archive }}
+      archive_sha256: {{ backup_tos_config_sha.stdout.split()[0] | default('n/a') }}
+      archive_bytes: {{ backup_tos_config_stat.stat.size | default('n/a') }}
+      member_count: {{ backup_tos_config_members.stdout | trim | default('n/a') }}
+      integrity: gzip-t+tar-tzf: ok
+      effective_paths: {{ ([backup_tos_scope] + backup_tos_extra_paths) | join(', ') }}
+      effective_excludes: {{ (backup_tos_excludes_raw.content | b64decode).splitlines() | join('; ') }}
+      tos_version: {{ (backup_tos_version_raw.content | default('') | b64decode | trim) | default('n/a', true) }}
+      one_file_system: true
+      secret_archive: {{ backup_tos_secrets_archive | basename if backup_tos_include_secrets else 'null' }}
+      postgres_port: {{ backup_tos_postgres_port }}
+      db_dumps: {{ 'postgresql/dumpall.sql' if backup_tos_postgres_dumpall else 'postgresql/*.sql' }}
+      sqlite_backups: {{ backup_tos_sqlite_dbs | map('basename') | join(', ') }}
+      enable_state_count: {{ backup_tos_enable_state.stdout_lines | length | default(0) }}
+      skipped_submounts: {{ backup_tos_submounts.stdout_lines | default([]) | join(', ') }}
+      restore_hint: "tar -C / -xzf <archive>"
     mode: "0600"
   delegate_to: localhost
   become: false
   when: backup_tos_fetch
 
+- name: Clean the remote staging directory and archives after verified fetch
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ backup_tos_staging_dir }}"
+    - "{{ backup_tos_archive }}"
+    - "{{ backup_tos_secrets_archive }}"
+  when: backup_tos_fetch
+
 - name: Report the backup location
   ansible.builtin.debug:
-    msg: "TOS backup archived at {{ backup_tos_local_dir }}/{{ inventory_hostname }}/{{ backup_tos_archive | basename }}"
+    msg: >-
+      TOS config backup for {{ inventory_hostname }} at
+      {{ backup_tos_local_dir }}/{{ inventory_hostname }}/{{ backup_tos_archive | basename }}
+      (manifest {{ backup_tos_timestamp }}-manifest.txt)

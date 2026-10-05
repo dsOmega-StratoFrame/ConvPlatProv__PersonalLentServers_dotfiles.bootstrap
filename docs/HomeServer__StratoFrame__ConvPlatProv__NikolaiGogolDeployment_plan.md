@@ -16,7 +16,7 @@
 ## 1. Decisions locked with the user
 
 1. **Scope** — full path: image sync + container deploy + a documented fast *edge-iteration* path. Real container changes are made by editing `Unix_dotfiles` (`NikolaiGogol` host config) and rebuilding; edge-sync helpers are **optional/adhoc**, deployed via Ansible only if required on the TOS host.
-2. **Image identity** — content-addressable tag: `ds-omega/nikolai-gogol:<sha12>` where `sha12` = first 12 hex of the tar.xz sha256.
+2. **Image identity** — content-addressable tag: `ds-omega/nikolai-gogol:<sha12>` where `sha12` = first 12 hex of the tar.xz sha256. The rule has a single implementation, shared with the build-side repos: `invoke --search-root=~/.bookmarks/shared-scripts conv-plat-prov.content-tag <tarball>` (see ADR 0002 and §12).
 3. **Transfer** — `ansible.posix.synchronize` (rsync `--checksum`) to a staging dir on `@terra`.
 4. **Reach `@NikolaiGogol`** — direct SSH (ProxyJump or a dedicated port, e.g. `2223`) is the **primary path for automatic (Ansible) deployment**; `ssh @terra && docker exec -it …` stays available for ad-hoc debugging (reuses the local dev muscle memory).
 
@@ -29,7 +29,8 @@ control node (localhost)          @terra (TOS 6, docker daemon)
 ─────────────────────             ──────────────────────────────
 nixos_image_artifact              nixos_image_sync
   select tar.xz + sha256            rsync --checksum → /var/tmp/nixos-images/<sha>.tar.xz
-  derive content tag                (idempotent: skip if checksum matches)
+  derive content tag                (shared cmd on localhost)
+                                    (idempotent: skip if checksum matches)
                                  nixos_image_load
                                    docker import → ds-omega/nikolai-gogol:<sha12>
                                    (gated on `docker image inspect`)
@@ -61,6 +62,7 @@ No new runtime deps on `@terra` beyond Docker (already bootstrapped). `bootstrap
 ### Step 3 — Role `nixos_image_artifact` (control node)
 - **Files:** `roles/nixos_image_artifact/{defaults,tasks}/main.yml`.
 - Behaviour: `delegate_to: localhost`, `become: false`. Locate `result-<system>/tarball/nixos-system-x86_64-linux.tar.xz` (default path from `Unix_dotfiles`), `stat` + `sha256sum` it, derive `nixos_image_name`/`nixos_image_tag` facts. Fail early (per AGENTS.md "validate inputs early") if the artifact is missing.
+- Tag derivation (ADR 0002): runs the shared command `invoke --search-root=~/.bookmarks/shared-scripts conv-plat-prov.content-tag <tarball>` on the control node (`nixos_image_artifact_content_tag_command`) and asserts its output equals the artifact `stat` sha256 slice. Production sets `nixos_image_artifact_content_tag_required: true` (`group_vars`); the role default is `false` so tests stay hermetic and fall back to the slice. Requires `invoke` on the control-node PATH, provided by the dev shell.
 - **Tests:** unit (tag-derivation length/charset); integration (stubbed artifact fixture, no real build).
 - **Acceptance:** role emits `nixos_image_artifact_path/checksum/tag/name`; missing artifact fails with a clear message.
 
@@ -129,7 +131,7 @@ None (new layer). Content-addressable import is additive; any manual `:latest` i
 
 ## 7. Observability
 
-Debug tasks print `artifact path / sha256 / tag`, rsync result, import image id, and `docker compose ps` in verify. No new metrics/log sinks (out of scope for a "simple sync").
+Debug tasks print `artifact path / sha256 / tag`, rsync result, import image id, and `docker compose ps` in verify. Tag parity is logged by comparing the shared-command output with the artifact slice (ADR 0002 D3). No new metrics/log sinks (out of scope for a "simple sync").
 
 ## 8. Rollback
 
@@ -155,8 +157,51 @@ Debug tasks print `artifact path / sha256 / tag`, rsync result, import image id,
 4. Actual `@terra` mount roots (`UNIX_DOTFILES`, `VIRT_SCRIPTS_BOOTSTRAP`, `HOME_ASSISTANT_IMAGE`) and storage volume layout.
 5. Whether `bootstrap_nix` stays on `@terra` (unused by the prebuilt-image model) — leave as-is unless you want it removed.
 6. Collection pinning policy — `ansible.posix`/`community.docker` are currently unpinned (only roles are pinned by the structure test); pin to versions if you want stricter reproducibility.
+7. **Symlinked-artifact stat caveat (F3):** `ansible.builtin.stat` does not follow a symlink that is the *final* path component, so a symlinked artifact reports no `checksum`. The real artifact path (`result-NikolaiGogol/tarball/...`) is a regular file, so this is a test-fixture caveat, not a role bug.
+8. **Shared-command ownership / pinning (ADR 0002 open questions 1–2):** the content-tag command is a cross-repo contract invoked by working-tree path, with no revision pin and no named owner yet.
+9. **`invoke` guarantee on the control node (ADR 0002 open question 3):** production requires `invoke`; the dev shell provides it, but a control node driven outside `nix develop` (e.g. `bin/dot-bootstrap` auto-install) needs a defined non-Nix path.
 
 ## 11. Out of scope (noted, not planned here)
 
 - `@Manilov` (HAOS VM, Layer 2) provisioning and `HOME_ASSISTANT_IMAGE` staging — only the mount point is created here.
 - `@tangerineDream` launcher/`SYSTEM_STRATEGIES` parity port — aspirational, separate task.
+
+## 12. Cross-repo content-addressable tag contract (follow-up; ADR 0002)
+
+The original Step 3 derived the tag in-role. A follow-up (build result §6b; user
+request "support such tag creation at the NikolaiGogol repo, so local testing
+matches remote") moved the rule into ONE shared command so the build side and the
+deploy side cannot drift. Full decision record:
+[`adr/0002-ContentAddressableImageTag.md`](./adr/0002-ContentAddressableImageTag.md).
+
+- **Single source of truth:** `invoke --search-root=~/.bookmarks/shared-scripts conv-plat-prov.content-tag <tarball>`
+  (`conv_plat_prov.compute_content_tag()`, streaming sha256, default `--length 12`).
+- **Deploy side (this repo):** `roles/nixos_image_artifact` runs that command on
+  the control node (`delegate_to: localhost`; nothing is sent to `@terra`),
+  asserts its output equals the artifact `stat` sha256 slice, and uses it as
+  `nixos_image_artifact_tag`. New defaults:
+  `nixos_image_artifact_content_tag_command` and
+  `nixos_image_artifact_content_tag_required` (default `false`;
+  `group_vars/nikolaigogol/vars.yml` sets `true`). `flake.nix` adds `invoke` to
+  the dev shell.
+- **Build side:** `Unix_dotfiles` `Makefile.ConvPlatProv-docker`
+  (`image-tag-<machine>` / `tarball-<machine>`) and `@NikolaiGogol` `Makefile`
+  (`IMAGE_TAG` / `IMAGE_NAME`; `import-nixos` then adds a local `:latest` alias)
+  call the same command.
+- **`:latest`:** local alias only; the deploy and verify paths use exclusively
+  the content tag.
+- **Cross-repo edges:** this repo → shared-scripts; `Unix_dotfiles` →
+  shared-scripts; `@NikolaiGogol` → shared-scripts.
+
+Affected files for this follow-up: this repo —
+`roles/nixos_image_artifact/{defaults,tasks}/main.yml`,
+`group_vars/nikolaigogol/vars.yml`, `flake.nix`, `README.md`; other repos —
+`shared-scripts/conv_plat_prov.py`,
+`Unix_dotfiles/Makefile.ConvPlatProv-docker`, `@NikolaiGogol/Makefile`,
+`@NikolaiGogol/.env.example`. Test:
+`test_shared_content_tag_command_matches_fixture` (fixture tag `ecfcf1d2a1e3`).
+No commits were made in any repository.
+
+Findings F1–F4, compatibility guarantees and prohibited changes are recorded in
+ADR 0002, along with the escalated open questions (shared-command ownership,
+revision pinning, and the `invoke` guarantee on a non-dev-shell control node).

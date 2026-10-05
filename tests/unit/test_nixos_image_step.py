@@ -10,7 +10,10 @@ render templates with Jinja2.
 """
 from __future__ import annotations
 
+import hashlib
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,6 +28,9 @@ CONTAINER_DEFAULTS = REPO / "roles" / "nixos_container" / "defaults" / "main.yml
 COMPOSE_TEMPLATE = REPO / "roles" / "nixos_container" / "templates" / "docker-compose-system.yml.j2"
 ENV_TEMPLATE = REPO / "roles" / "nixos_container" / "templates" / "env.j2"
 NIKOLAIGOGOL_VARS = REPO / "group_vars" / "nikolaigogol" / "vars.yml"
+SHARED_SCRIPTS_DIR = Path.home() / ".bookmarks" / "shared-scripts"
+ROOTFS_FIXTURE = REPO / "tests" / "integration" / "fixtures" / "minimal-rootfs.tar.xz"
+FIXTURE_ROOTFS_TAG = "ecfcf1d2a1e3"
 
 
 def load(path: Path) -> dict:
@@ -57,6 +63,51 @@ def test_artifact_archive_relative_path(artifact_defaults):
         nixos_image_artifact_tarball_name=artifact_defaults["nixos_image_artifact_tarball_name"],
     )
     assert rendered == "result-NikolaiGogol/tarball/nixos-system-x86_64-linux.tar.xz"
+
+
+def test_artifact_content_tag_command_uses_shared_task(artifact_defaults):
+    # The role derives its tag through the same shared command the build-side
+    # repos (Unix_dotfiles, @NikolaiGogol) use, so the two cannot drift.
+    command = artifact_defaults["nixos_image_artifact_content_tag_command"]
+    assert "conv-plat-prov.content-tag" in command
+    assert "shared-scripts" in command
+
+
+def test_artifact_content_tag_not_required_by_default(artifact_defaults):
+    # Hermetic tests (no invoke / no shared-scripts) rely on this default.
+    assert artifact_defaults["nixos_image_artifact_content_tag_required"] is False
+
+
+def test_group_vars_require_content_tag_command():
+    assert load(NIKOLAIGOGOL_VARS)["nixos_image_artifact_content_tag_required"] is True
+
+
+def test_fixture_tag_is_first_12_hex_of_sha256():
+    digest = hashlib.sha256(ROOTFS_FIXTURE.read_bytes()).hexdigest()
+    assert digest[:12] == FIXTURE_ROOTFS_TAG
+    assert re.fullmatch(r"[0-9a-f]{12}", FIXTURE_ROOTFS_TAG)
+
+
+@pytest.mark.skipif(
+    shutil.which("invoke") is None or not SHARED_SCRIPTS_DIR.is_dir(),
+    reason="shared-scripts content-tag command not available on this host",
+)
+def test_shared_content_tag_command_matches_fixture():
+    # End-to-end proof of tag parity: the shared command (used locally) yields
+    # exactly the sha256[:12] slice the role asserts against on the control node.
+    result = subprocess.run(
+        [
+            "invoke",
+            "-r",
+            str(SHARED_SCRIPTS_DIR),
+            "conv-plat-prov.content-tag",
+            str(ROOTFS_FIXTURE),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == FIXTURE_ROOTFS_TAG
 
 
 def test_tag_derivation_is_first_12_hex():

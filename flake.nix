@@ -44,6 +44,11 @@
             pyyaml
             jinja2
             ansible-core
+            # Shared content-addressable image tag derivation:
+            # `invoke --search-root=~/.bookmarks/shared-scripts conv-plat-prov.content-tag`.
+            # Used by roles/nixos_image_artifact and the build-side Makefiles so
+            # local testing and the remote deploy agree on the image tag.
+            invoke
           ]);
         in
         {

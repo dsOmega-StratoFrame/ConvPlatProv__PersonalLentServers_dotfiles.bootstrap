@@ -33,11 +33,52 @@
       build-{{ nixos_image_artifact_system_name }}
   when: not nixos_image_artifact_stat.stat.exists
 
-- name: Publish the artifact identity
+- name: Publish the artifact archive and checksum
   ansible.builtin.set_fact:
     nixos_image_artifact_archive: "{{ nixos_image_artifact_source_dir }}/{{ nixos_image_artifact_archive_relative }}"
     nixos_image_artifact_checksum: "{{ nixos_image_artifact_stat.stat.checksum }}"
-    nixos_image_artifact_tag: "{{ nixos_image_artifact_stat.stat.checksum[: (nixos_image_artifact_tag_length | int)] }}"
+    nixos_image_artifact_checksum_slice: "{{ nixos_image_artifact_stat.stat.checksum[: (nixos_image_artifact_tag_length | int)] }}"
+
+# Derive the tag through the same shared command the build-side repos use, so
+# local testing and this deploy cannot disagree. Runs on the control node.
+- name: Derive the content tag via the shared command
+  ansible.builtin.command:
+    cmd: "{{ nixos_image_artifact_content_tag_command }} {{ nixos_image_artifact_archive }}"
+  delegate_to: localhost
+  become: false
+  register: nixos_image_artifact_content_tag_run
+  changed_when: false
+  failed_when: false
+
+- name: Fail when the shared content-tag command is required but failed
+  ansible.builtin.fail:
+    msg: >-
+      Shared content-tag command failed (rc={{ nixos_image_artifact_content_tag_run.rc }}):
+      {{ nixos_image_artifact_content_tag_command }}. Ensure `invoke` is on the
+      control node PATH (this repo's dev shell provides it: `nix develop .`), or
+      set nixos_image_artifact_content_tag_required=false to fall back to the
+      built-in sha256 slice.
+  when:
+    - nixos_image_artifact_content_tag_required | bool
+    - nixos_image_artifact_content_tag_run.rc != 0
+
+- name: Assert the shared tag matches the artifact sha256 slice
+  ansible.builtin.assert:
+    that:
+      - (nixos_image_artifact_content_tag_run.stdout | trim) == nixos_image_artifact_checksum_slice
+    fail_msg: >-
+      Shared content-tag command disagrees with the artifact checksum
+      ({{ nixos_image_artifact_content_tag_run.stdout | trim }} !=
+      {{ nixos_image_artifact_checksum_slice }}). Fix ~/.bookmarks/shared-scripts
+      or the pinned revisions.
+  when: nixos_image_artifact_content_tag_run.rc == 0
+
+- name: Publish the artifact identity
+  ansible.builtin.set_fact:
+    nixos_image_artifact_tag: >-
+      {{ (nixos_image_artifact_content_tag_run.stdout | trim)
+         if (nixos_image_artifact_content_tag_run.rc == 0)
+         else nixos_image_artifact_checksum_slice }}
 
 - name: Publish the content-addressed image name
   ansible.builtin.set_fact:

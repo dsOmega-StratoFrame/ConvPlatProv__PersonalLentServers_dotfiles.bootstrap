@@ -1,6 +1,7 @@
 # ADR 0001 — HomeServer / Home Assistant Ansible bootstrap architecture
 
 - **Status:** Accepted for Layers 0–1 (`@terra`, `@NikolaiGogol`); Proposed for Layer 2 (`@Manilov`)
+- **Tag identity contract:** [`0002-ContentAddressableImageTag.md`](./0002-ContentAddressableImageTag.md) — cross-repo; refines §6 below.
 - **Context diagram:** [`../Deploy#NixContainer.puml`](../Deploy#NixContainer.puml)
 - **Rollout plan:** [`../HomeServer__HomeAssistant_plan.md`](../HomeServer__HomeAssistant_plan.md)
 - **Scope:** the Ansible side only. Physical/logical relationships between
@@ -93,6 +94,9 @@ The Nix installer is pinned to a commit in `requirements.yml`; collection
 dependencies are declared there too (`community.docker`, `ansible.posix`).
 Reproducibility beats "latest". The deployed container image is likewise
 content-addressed: its tag is the artifact sha256 prefix, never a moving tag.
+The cross-repo contract for deriving that tag — one shared command
+(`conv-plat-prov.content-tag`), control-node execution, and the
+`:latest`-alias-only rule — is fixed in [ADR 0002](./0002-ContentAddressableImageTag.md).
 
 ### 7. Detect before installing (Docker), wrap the installer (Nix)
 
@@ -137,6 +141,7 @@ content-addressed: its tag is the artifact sha256 prefix, never a moving tag.
 
 ## References
 
+- [`0002-ContentAddressableImageTag.md`](./0002-ContentAddressableImageTag.md) — cross-repo content-addressable tag contract
 - [`../Deploy#NixContainer.puml`](../Deploy#NixContainer.puml) — system diagram
 - [`../HomeServer__HomeAssistant_plan.md`](../HomeServer__HomeAssistant_plan.md)
 - `danielrolls/nix-install` — Ansible role installing multi-user Nix

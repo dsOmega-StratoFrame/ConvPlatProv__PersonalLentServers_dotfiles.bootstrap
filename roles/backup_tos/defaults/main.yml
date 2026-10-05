@@ -1,35 +1,63 @@
 ---
-# First deployment step: snapshot the TOS system configuration before any
-# change is applied and pull the archive to the control node.
+# First deployment step: snapshot the TOS configuration before any change is
+# applied and pull the archives to the control node.
 #
-# This is a *configuration* backup (system files), not a block-level image of
-# the TOS system disk. Pair it with TerraMaster's own config export when doing
-# risky work.
+# Scope is the whole /etc tree (anchored vendor excludes, --one-file-system),
+# plus a small set of out-of-/etc extras. Credential material is captured into a
+# SEPARATE secrets archive, never merged into the config archive. This is a
+# *configuration* backup, not a block-level image: /Volume1 state data is OUT of
+# scope. Pair it with TerraMaster's own config export when doing risky work.
+#
+# See ADR-TOS-BACKUP-001 R2 for the binding architecture.
 backup_tos_local_dir: "{{ playbook_dir }}/backups"
 backup_tos_remote_dir: "/var/tmp"
 backup_tos_timestamp: "{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date +%Y%m%dT%H%M%S')) }}"
+backup_tos_staging_dir: "{{ backup_tos_remote_dir }}/backup_tos-{{ inventory_hostname }}-{{ backup_tos_timestamp }}"
+backup_tos_scope: "/etc"
+
+# Anchored vendor excludes. Patterns are relative to the scanned tree (no
+# leading slash) so `tar --anchored` matches them at the archive root.
+backup_tos_vendor_excludes:
+  - "./i18n"
+  - "./udev"
+  - "./pam.d"
+  - "./tos/modules"
+  - "./checksystem.db"
+
+# Dead entries: kept only to document that they are intentionally no longer
+# special-cased (/etc/nix is not packaged on TOS 6; os-release/mdadm.conf are
+# no longer treated specially either).
+backup_tos_dead_excludes:
+  - "./nix"
+
+# Out-of-/etc paths staged under extras/ and folded into the config archive.
+backup_tos_extra_paths:
+  - "/var/spool/cron"
+  - "/var/lib/samba/private"
+
+# Credential material is captured into a separate archive by default. When this
+# is false the secret paths are excluded from the config archive instead.
+backup_tos_include_secrets: true
+backup_tos_secret_paths:
+  - "/etc/shadow"
+  - "/etc/gshadow"
+  - "/etc/ssh/ssh_host_*_key"
+  - "/etc/ssl/private"
+  - "/etc/certificate/_archive"
+  - "/var/lib/samba/private/secrets.tdb"
+  - "agent.key"
+
+# Definite database capture. PostgreSQL speaks on a non-default port; raw data
+# directories are never shipped, only logical dumps.
+backup_tos_postgres_port: 5032
+backup_tos_postgres_dumpall: true
+backup_tos_postgres_exclude: "./postgresql/13/main"
+backup_tos_sqlite_dbs:
+  - "/etc/tos/actionLog/tos.db"
+  - "/etc/tos/rsyncLog/rsync.db"
+  - "/etc/ScheduledTask/schedule_task.db"
+
 backup_tos_archive: "{{ backup_tos_remote_dir }}/{{ inventory_hostname }}-tos-config-{{ backup_tos_timestamp }}.tar.gz"
+backup_tos_secrets_archive: "{{ backup_tos_remote_dir }}/{{ inventory_hostname }}-tos-secrets-{{ backup_tos_timestamp }}.tar.gz"
+backup_tos_secrets_local_dir: "{{ backup_tos_local_dir }}/{{ inventory_hostname }}/secrets"
 backup_tos_fetch: true
-
-# Curated system-configuration paths. Missing entries are ignored.
-backup_tos_paths:
-  - /etc/fstab
-  - /etc/mdadm.conf
-  - /etc/mdadm/mdadm.conf
-  - /etc/hostname
-  - /etc/hosts
-  - /etc/passwd
-  - /etc/group
-  - /etc/os-release
-  - /etc/network
-  - /etc/netplan
-  - /etc/systemd/system
-  - /etc/cron.d
-  - /etc/nix
-  - /etc/tos
-  - /var/spool/cron
-
-# Never archive credential material.
-backup_tos_excludes:
-  - /etc/shadow
-  - /etc/gshadow
