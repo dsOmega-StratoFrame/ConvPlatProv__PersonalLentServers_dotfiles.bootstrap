@@ -146,6 +146,8 @@ dmypy.json
 # Ansible
 *.retry
 /tmp/
+# - Locally installed collections, modules, roles
+.ansible
 
 # direnv / Nix dev shell
 .direnv/
