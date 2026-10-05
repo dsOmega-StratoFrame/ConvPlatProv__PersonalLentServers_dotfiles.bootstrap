@@ -1,9 +1,14 @@
 ---
-# Integration test: run the Layer-0 roles against the mock @terra container.
+# Integration test: run the Layer-0 and Layer-1 roles against the mock @terra
+# container.
 #
 # This playbook lives under tests/integration/, so the real group_vars/terra is
 # not loaded; all mock-specific values are set here. Roles are resolved through
 # ANSIBLE_ROLES_PATH (see the Makefile targets).
+#
+# Layer 1 runs with no Docker daemon: the import is skipped
+# (nixos_image_load_manage=false) and the compose is rendered/validated only
+# (nixos_container_manage_compose=false). Starting the container is E2E-only.
 - name: Integration test — bootstrap the mock @terra
   hosts: terra
   gather_facts: true
@@ -18,6 +23,29 @@
     bootstrap_nix_extra_config:
       # Containers cannot sandbox Nix builds.
       sandbox: false
+
+    # --- Layer 1 (@NikolaiGogol) mock values --------------------------------
+    # No group_vars/nikolaigogol here, so the image identity is supplied inline.
+    nixos_image_namespace: "ds-omega"
+    nixos_image_base_name: "nikolai-gogol"
+    nixos_image_repository: "ds-omega/nikolai-gogol"
+    # The fixture's content tag (first 12 hex of its sha256). Update if the
+    # fixture is regenerated.
+    nixos_image_tag: "ecfcf1d2a1e3"
+    nixos_image_artifact_source_dir: "{{ playbook_dir }}/fixtures"
+    nixos_image_artifact_archive_relative: "minimal-rootfs.tar.xz"
+    nixos_image_sync_remote_dir: "/var/tmp/nixos-images"
+    nixos_image_load_manage: false
+    nixos_container_project_dir: "/var/tmp/nikolaigogol"
+    nixos_container_manage_compose: false
+    nixos_container_validate: false
+    nixos_container_mounts:
+      - source: "/var/tmp/nikolaigogol/data/Unix_dotfiles"
+        target: "/home/ds13/.bookmarks/shared-configs/Unix_dotfiles"
+        type: directory
+      - source: "/var/tmp/nikolaigogol/data/Virt_scripts_bootstrap"
+        target: "/home/ds13/.bookmarks/Virt_scripts_bootstrap"
+        type: directory
   roles:
     - role: backup_tos
       tags: [backup]
@@ -29,3 +57,12 @@
       tags: [nix]
     - role: bootstrap_docker
       tags: [docker]
+    # Layer 1 — @NikolaiGogol
+    - role: nixos_image_artifact
+      tags: [image]
+    - role: nixos_image_sync
+      tags: [image]
+    - role: nixos_image_load
+      tags: [image]
+    - role: nixos_container
+      tags: [container]

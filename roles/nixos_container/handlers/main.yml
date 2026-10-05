@@ -1,0 +1,14 @@
+---
+# Recreate the container when the compose file or env changed. `recreate: auto`
+# keeps it idempotent: it only rebuilds the container if the rendered config
+# actually differs from what is running.
+- name: Recreate the NikolaiGogol system container
+  community.docker.docker_compose_v2:
+    project_src: "{{ nixos_container_project_dir }}"
+    files:
+      - "{{ nixos_container_compose_file | basename }}"
+    state: present
+    pull: never
+    recreate: auto
+  when: nixos_container_manage_compose
+  become: "{{ nixos_container_become }}"

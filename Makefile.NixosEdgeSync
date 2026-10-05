@@ -1,0 +1,13 @@
+# Manual testing for the optional edge-iteration helper (role: nixos_edge_sync).
+#
+# OFF BY DEFAULT: the role is inert unless enabled. To use it:
+#
+#   make -f Makefile.NixosEdgeSync run EXTRA_ARGS='-e nixos_edge_sync_enabled=true'
+#
+# It rsyncs the local Unix_dotfiles checkout into the container bind mount on
+# @terra and runs `nixos-rebuild switch --flake` inside the running container.
+# The canonical path remains: rebuild the artifact, then `TAGS=image,container`.
+STEP_TAGS := edge_sync
+PLAYBOOK := deploy-nikolaigogol.yml
+VERIFY_PLAYBOOK := verify-nikolaigogol.yml
+include Makefile.Steps

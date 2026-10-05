@@ -1,0 +1,17 @@
+---
+# nixos_image_artifact — locate the NixOS system-container rootfs tarball built
+# on the control node and derive its content-addressable identity.
+#
+# Runs with `delegate_to: localhost` + `become: false`: it inspects the
+# workstation's Unix_dotfiles build output, it does not touch @terra.
+#
+# It NEVER builds. If the artifact is missing it fails early with the command to
+# produce it. See docs/HomeServer__StratoFrame__ConvPlatProv__NikolaiGogolDeployment_plan.md.
+nixos_image_artifact_source_dir: "{{ lookup('env', 'HOME') }}/.bookmarks/shared-configs/Unix_dotfiles"
+nixos_image_artifact_system_name: "NikolaiGogol"
+nixos_image_artifact_tarball_name: "nixos-system-x86_64-linux.tar.xz"
+nixos_image_artifact_archive_relative: "result-{{ nixos_image_artifact_system_name }}/tarball/{{ nixos_image_artifact_tarball_name }}"
+nixos_image_artifact_checksum_algorithm: "sha256"
+nixos_image_artifact_tag_length: 12
+# The repository the content tag is applied to. Shared with the container role.
+nixos_image_artifact_image_repository: "{{ nixos_image_repository | default('ds-omega/nikolai-gogol') }}"

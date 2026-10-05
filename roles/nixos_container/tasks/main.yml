@@ -1,0 +1,112 @@
+---
+# Runs against @terra (the Docker host).
+
+- name: Validate the container inputs
+  ansible.builtin.assert:
+    that:
+      - nixos_container_name | length > 0
+      - nixos_container_username | length > 0
+      - nixos_container_image_repository | length > 0
+      - nixos_container_image_tag | length > 0
+      - nixos_container_mounts | length > 0
+    fail_msg: >-
+      nixos_container_* inputs are incomplete (image tag empty?). Run the `image`
+      tag first, or pin nixos_image_tag in group_vars/nikolaigogol/vars.yml.
+
+- name: Validate each mount definition
+  ansible.builtin.assert:
+    that:
+      - item.source is defined and item.source | length > 0
+      - item.target is defined and item.target | length > 0
+      - item.type is defined
+      - item.type in ['directory', 'file']
+    fail_msg: "Invalid mount entry: {{ item }}"
+  loop: "{{ nixos_container_mounts }}"
+  loop_control:
+    label: "{{ item.source | default('?') }}"
+
+- name: Report the container identity
+  ansible.builtin.debug:
+    msg:
+      - "container: {{ nixos_container_name }}"
+      - "image:     {{ nixos_container_image }}"
+      - "project:   {{ nixos_container_project_dir }}"
+
+- name: Ensure the compose project directory exists
+  ansible.builtin.file:
+    path: "{{ nixos_container_project_dir }}"
+    state: directory
+    mode: "{{ nixos_container_project_dir_mode }}"
+
+- name: Ensure directory mount sources exist
+  ansible.builtin.file:
+    path: "{{ item.source }}"
+    state: directory
+    mode: "{{ nixos_container_mount_dir_mode }}"
+  loop: "{{ nixos_container_mounts | selectattr('type', 'equalto', 'directory') | list }}"
+  loop_control:
+    label: "{{ item.source }}"
+
+- name: Inspect file mount sources
+  ansible.builtin.stat:
+    path: "{{ item.source }}"
+  register: nixos_container_file_mounts
+  loop: "{{ nixos_container_mounts | selectattr('type', 'equalto', 'file') | list }}"
+  loop_control:
+    label: "{{ item.source }}"
+
+- name: Fail closed when a file mount source is missing
+  ansible.builtin.fail:
+    msg: >-
+      Mount source {{ item.item.source }} does not exist. Stage it before
+      deploying this layer (e.g. the @Manilov HAOS image).
+  loop: "{{ nixos_container_file_mounts.results }}"
+  loop_control:
+    label: "{{ item.item.source }}"
+  when: not item.stat.exists
+
+- name: Render the system-container compose file
+  ansible.builtin.template:
+    src: docker-compose-system.yml.j2
+    dest: "{{ nixos_container_compose_file }}"
+    mode: "{{ nixos_container_config_mode }}"
+  notify: Recreate the NikolaiGogol system container
+
+- name: Render the system-container env file
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ nixos_container_env_file }}"
+    mode: "{{ nixos_container_config_mode }}"
+  notify: Recreate the NikolaiGogol system container
+
+- name: Validate the rendered compose file
+  ansible.builtin.command:
+    cmd: "{{ nixos_container_docker_binary }} compose -f {{ nixos_container_compose_file | basename }} config -q"
+    chdir: "{{ nixos_container_project_dir }}"
+  when: nixos_container_validate
+  changed_when: false
+  become: "{{ nixos_container_become }}"
+
+- name: Ensure the system container is up
+  community.docker.docker_compose_v2:
+    project_src: "{{ nixos_container_project_dir }}"
+    files:
+      - "{{ nixos_container_compose_file | basename }}"
+    state: present
+    pull: never
+  when: nixos_container_manage_compose
+  become: "{{ nixos_container_become }}"
+
+- name: Report the container status
+  ansible.builtin.command: "{{ nixos_container_docker_binary }} compose -f {{ nixos_container_compose_file | basename }} ps"
+  args:
+    chdir: "{{ nixos_container_project_dir }}"
+  when: nixos_container_manage_compose
+  register: nixos_container_ps
+  changed_when: false
+  become: "{{ nixos_container_become }}"
+
+- name: Show the container status
+  ansible.builtin.debug:
+    var: nixos_container_ps.stdout_lines
+  when: nixos_container_manage_compose

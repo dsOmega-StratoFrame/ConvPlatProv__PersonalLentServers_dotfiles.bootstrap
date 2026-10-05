@@ -147,6 +147,9 @@ dmypy.json
 *.retry
 /tmp/
 
+# direnv / Nix dev shell
+.direnv/
+
 # HomeServer
 backups/
 tests/artifacts/

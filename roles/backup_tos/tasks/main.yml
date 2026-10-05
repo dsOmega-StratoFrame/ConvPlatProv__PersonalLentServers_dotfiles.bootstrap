@@ -5,7 +5,9 @@
   changed_when: false
   failed_when: false
 
-- name: Create the TOS configuration archive
+# `tar` is used to *create* an archive with --ignore-failed-read; the unarchive
+# module only extracts, so it does not apply here.
+- name: Create the TOS configuration archive  # noqa: command-instead-of-module
   ansible.builtin.command:
     cmd: >-
       tar --ignore-failed-read --warning=no-file-changed

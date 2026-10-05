@@ -1,0 +1,17 @@
+---
+# nixos_edge_sync — optional fast-iteration helper. OFF BY DEFAULT.
+#
+# When enabled it rsyncs the local Unix_dotfiles checkout into the container's
+# bind mount on @terra and runs `nixos-rebuild switch --flake` inside the running
+# container. This is the "fast edge" loop; the canonical path is still to rebuild
+# the artifact in Unix_dotfiles and redeploy (image + container tags).
+#
+# Only enable if the TOS host really needs it; otherwise use it ad hoc.
+nixos_edge_sync_enabled: false
+nixos_edge_sync_source_dir: "{{ lookup('env', 'HOME') }}/.bookmarks/shared-configs/Unix_dotfiles"
+nixos_edge_sync_remote_dir: "{{ nixos_container_unix_dotfiles_dir | default('/var/lib/nikolaigogol/data/Unix_dotfiles') }}"
+nixos_edge_sync_container_name: "{{ nixos_container_name | default('HomeServer__HomeAssistant.NikolaiGogol') }}"
+nixos_edge_sync_container_flake: "/home/{{ nixos_container_username | default('ds13') }}/.bookmarks/shared-configs/Unix_dotfiles"
+nixos_edge_sync_flake_attr: "NikolaiGogol"
+nixos_edge_sync_rsync_opts: ["--exclude=.git", "--exclude=result-*"]
+nixos_edge_sync_become: true

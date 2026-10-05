@@ -39,6 +39,8 @@ test:
 check:
 	ANSIBLE_CONFIG=ansible.cfg ansible-playbook ./HomeServer__HomeAssistant.yml --syntax-check
 	ANSIBLE_CONFIG=ansible.cfg ansible-playbook ./verify-terra.yml --syntax-check
+	ANSIBLE_CONFIG=ansible.cfg ansible-playbook ./deploy-nikolaigogol.yml --syntax-check
+	ANSIBLE_CONFIG=ansible.cfg ansible-playbook ./verify-nikolaigogol.yml --syntax-check
 
 lint:
 	ansible-lint
@@ -78,7 +80,10 @@ help:
 	@echo "  e2e                   run against the real NAS"
 	@echo "  lint                  ansible-lint"
 	@echo "Per-step manual testing: make -f Makefile.<Step> help"
-	@echo "  (Makefile.BackupTos, .AccessSsh, .NixBootstrap, .DockerDeployment)"
+	@echo "  (Makefile.BackupTos, .AccessSsh, .NixBootstrap, .DockerDeployment,"
+	@echo "   .NixosImage, .NixosContainer, .NixosEdgeSync)"
+	@echo "Layer 1 (@NikolaiGogol): make -f Makefile.NixosImage run, then"
+	@echo "  make -f Makefile.NixosContainer run (see README 'Layer 1')."
 
 config:
 	ansible-config dump

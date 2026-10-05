@@ -1,6 +1,6 @@
 # ADR 0001 — HomeServer / Home Assistant Ansible bootstrap architecture
 
-- **Status:** Accepted for Layer 0 (`@terra`); Proposed for Layers 1–2
+- **Status:** Accepted for Layers 0–1 (`@terra`, `@NikolaiGogol`); Proposed for Layer 2 (`@Manilov`)
 - **Context diagram:** [`../Deploy#NixContainer.puml`](../Deploy#NixContainer.puml)
 - **Rollout plan:** [`../HomeServer__HomeAssistant_plan.md`](../HomeServer__HomeAssistant_plan.md)
 - **Scope:** the Ansible side only. Physical/logical relationships between
@@ -15,8 +15,9 @@ Ubuntu-22.04-compatible, systemd-based rootfs. On top of it we want:
 - `@Manilov` — a HomeAssistant OS VM, configured partly through Nix and partly
   through configuration volumes hoisted from `@terra`.
 
-The repository started as a copy of a VLESS-on-VPS bootstrap. Only Layer 0 is
-implemented so far: put Nix and Docker on `@terra`.
+The repository started as a copy of a VLESS-on-VPS bootstrap. Layers 0 and 1 are
+implemented: Nix + Docker on `@terra`, and the `@NikolaiGogol` NixOS system
+container layered on top of it.
 
 ## Decision drivers
 
@@ -42,8 +43,12 @@ makes mixed direct/layered access safe.
 ### 2. One playbook per layer
 
 - `HomeServer__HomeAssistant.yml` — Layer 0, targeted at `terra`.
-- `deploy-nikolaigogol.yml`, `deploy-manilov.yml`, `configure-services.yml` —
-  roadmap layers.
+- `deploy-nikolaigogol.yml` — Layer 1, targeted at `terra`. Because a
+  `terra`-targeted play does not auto-load `group_vars/nikolaigogol`, the play
+  pulls that file in explicitly with `vars_files` (which also means it must never
+  define `ansible_*` connection variables). Tags: `image`, `container`,
+  `edge_sync`.
+- `deploy-manilov.yml`, `configure-services.yml` — roadmap layers.
 
 Stages inside a play are selected with tags (`backup`, `access`, `base`, `nix`,
 `docker`), so operators can re-run a single concern.
@@ -67,6 +72,11 @@ The deployment decomposes into small roles, each a single concern:
 | `bootstrap_base` | minimal base prerequisites |
 | `bootstrap_nix` | Nix (multi-user) via the pinned galaxy role |
 | `bootstrap_docker` | detect/ensure Docker |
+| `nixos_image_artifact` | locate + checksum the image artifact (control node) |
+| `nixos_image_sync` | rsync the artifact to `@terra` (checksum-based) |
+| `nixos_image_load` | `docker import`, gated on `docker image inspect` |
+| `nixos_container` | render compose/env, ensure mounts, compose up |
+| `nixos_edge_sync` | optional fast-iteration helper (off by default) |
 
 New capability becomes a new role rather than a larger existing one.
 
@@ -80,7 +90,9 @@ New capability becomes a new role rather than a larger existing one.
 ### 6. Dependencies are pinned
 
 The Nix installer is pinned to a commit in `requirements.yml`; collection
-dependencies are declared there too. Reproducibility beats "latest".
+dependencies are declared there too (`community.docker`, `ansible.posix`).
+Reproducibility beats "latest". The deployed container image is likewise
+content-addressed: its tag is the artifact sha256 prefix, never a moving tag.
 
 ### 7. Detect before installing (Docker), wrap the installer (Nix)
 

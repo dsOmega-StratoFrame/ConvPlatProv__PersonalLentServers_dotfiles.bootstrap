@@ -1,6 +1,93 @@
 ---
 # @NikolaiGogol — NixOS system container (the reusable Nix "SDK") running on
-# @terra. Not bootstrapped by this Playbook yet; placeholders for the roadmap.
-# See docs/HomeServer__HomeAssistant_plan.md.
-nikolaigogol_container_name: "NikolaiGogolSystem"
-nikolaigogol_image_name: "nikolaigogol:latest"
+# @terra. This file is the deployment interface for `deploy-nikolaigogol.yml`.
+#
+# NOTE ON WIRING: the deploy play targets `terra` (the Docker host), so Ansible
+# does not auto-load this group's vars. The play pulls this file in explicitly
+# with `vars_files:`. See docs/adr/0001-HomeServer__HomeAssistant.md.
+#
+# WARNING: `vars_files` has higher precedence than inventory group_vars/host_vars.
+# Never define `ansible_*` connection variables here — they would override the
+# `@terra` connection for the whole play. The direct-SSH debug connection lives in
+# hosts.ini under [nikolaigogol:vars].
+# See docs/HomeServer__StratoFrame__ConvPlatProv__NikolaiGogolDeployment_plan.md.
+
+# --- Image identity -----------------------------------------------------------
+# Content-addressable: the tag is the first 12 hex chars of the artifact sha256,
+# derived at deploy time by roles/nixos_image_artifact (never a moving tag).
+#
+# For a normal deploy leave `nixos_image_tag` as the derivation expression. To
+# PIN/ROLL BACK, replace it with a literal 12-hex content tag and run
+# `TAGS=container` (no re-import needed).
+nixos_image_namespace: "ds-omega"
+nixos_image_base_name: "nikolai-gogol"
+nixos_image_repository: "{{ nixos_image_namespace }}/{{ nixos_image_base_name }}"
+nixos_image_tag: "{{ nixos_image_artifact_tag | default('') }}"
+
+# --- Artifact (control node) --------------------------------------------------
+# The image is built on the workstation from Unix_dotfiles:
+#   make --directory=~/.bookmarks/shared-configs/Unix_dotfiles build-NikolaiGogol
+# This role only locates + checksums the result; it never builds.
+nixos_image_artifact_source_dir: "{{ lookup('env', 'HOME') }}/.bookmarks/shared-configs/Unix_dotfiles"
+nixos_image_artifact_system_name: "NikolaiGogol"
+
+# --- Transfer (control node -> @terra) ----------------------------------------
+nixos_image_sync_remote_dir: "/var/tmp/nixos-images"
+
+# --- Container identity -------------------------------------------------------
+nixos_container_namespace: "{{ nixos_image_namespace }}"
+nixos_container_image_base_name: "{{ nixos_image_base_name }}"
+nixos_container_image_repository: "{{ nixos_image_repository }}"
+# Resolved from the artifact at deploy time; pin with a literal tag for rollback.
+nixos_container_image_tag: "{{ nixos_image_tag }}"
+
+nixos_container_name: "HomeServer__HomeAssistant.NikolaiGogol"
+nixos_container_service_name: "NikolaiGogolSystem"
+nixos_container_username: "ds13"
+# Used by both the deploy roles and verify-nikolaigogol.yml (which loads this
+# file via vars_files but does not run the nixos_container role, so it cannot
+# rely on that role's defaults).
+nixos_container_docker_binary: "docker"
+nixos_container_become: true
+
+# --- Container files / mounts on @terra ---------------------------------------
+# TODO(confirm-on-first-live-run): the real TOS storage volume layout. These
+# defaults keep everything under one root so the role can create the directory
+# mounts; set them to the actual volume paths before the first live run.
+nixos_container_project_dir: "/var/lib/nikolaigogol"
+nixos_container_data_root: "/var/lib/nikolaigogol/data"
+nixos_container_unix_dotfiles_dir: "{{ nixos_container_data_root }}/Unix_dotfiles"
+nixos_container_virt_scripts_dir: "{{ nixos_container_data_root }}/Virt_scripts_bootstrap"
+nixos_container_home_assistant_image: "{{ nixos_container_data_root }}/HomeAssistant/haos_ova.qcow2"
+
+# `type: directory` sources are created by the role; `type: file` sources must
+# already exist (the @Manilov layer stages the HAOS image) and fail-closed.
+nixos_container_mounts:
+  - source: "{{ nixos_container_unix_dotfiles_dir }}"
+    target: "/home/{{ nixos_container_username }}/.bookmarks/shared-configs/Unix_dotfiles"
+    type: directory
+  - source: "{{ nixos_container_virt_scripts_dir }}"
+    target: "/home/{{ nixos_container_username }}/.bookmarks/Virt_scripts_bootstrap"
+    type: directory
+  - source: "{{ nixos_container_home_assistant_image }}"
+    target: "/opt/HomeServer__HomeAssistant/haos_ova.qcow2"
+    type: file
+
+# --- Direct SSH override (debugging / automatic container redeploy) ----------
+# hosts.ini [nikolaigogol] points at this endpoint; the container's sshd is
+# exposed on the NAS at this port (a Unix_dotfiles concern, see plan §10).
+nixos_container_ssh_host: "terra-local"
+nixos_container_ssh_port: 2223
+nixos_container_ssh_user: "{{ nixos_container_username }}"
+deploy_ssh_private_key_file: "~/.ssh/Lent__terra-HomeServer__HomeAssistant-local"
+
+# --- Optional edge iteration helper (off by default) --------------------------
+# roles/nixos_edge_sync rsyncs the Unix_dotfiles checkout into the bind mount and
+# runs `nixos-rebuild switch --flake` inside the running container. Inert unless
+# this is set to true; see Makefile.NixosEdgeSync.
+# nixos_edge_sync_enabled: false
+
+# --- Secrets ------------------------------------------------------------------
+# The image sync itself needs no secret. Anything added later (HA config, age
+# keys) must go through the vault_* indirection in the encrypted
+# group_vars/nikolaigogol/vault, never inline here.

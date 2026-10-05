@@ -1,0 +1,11 @@
+# Manual testing for the NixOS image pipeline (roles: nixos_image_artifact,
+# nixos_image_sync, nixos_image_load) — the `image` tag of
+# deploy-nikolaigogol.yml.
+#
+# See Makefile.Steps for the target list and INVENTORY selection.
+#   INVENTORY=hosts.ini                       -> real @terra (E2E)
+#   INVENTORY=tests/integration/inventory.ini -> mock container
+STEP_TAGS := image
+PLAYBOOK := deploy-nikolaigogol.yml
+VERIFY_PLAYBOOK := verify-nikolaigogol.yml
+include Makefile.Steps

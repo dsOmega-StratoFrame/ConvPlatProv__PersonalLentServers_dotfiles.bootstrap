@@ -9,7 +9,7 @@ Ansible bootstrap for the home-server stack built around a TerraMaster NAS
 | Layer | Host | What it is | Handled by |
 |---|---|---|---|
 | 0 | `@terra` | TerraMaster NAS running **TOS 6** | this repository (Nix + Docker) |
-| 1 | `@NikolaiGogol` | NixOS system container (the reusable Nix "SDK") on `@terra` | roadmap |
+| 1 | `@NikolaiGogol` | NixOS system container (the reusable Nix "SDK") on `@terra` | this repository (`deploy-nikolaigogol.yml`) |
 | 2 | `@Manilov` | HomeAssistant OS VM hosted by `@NikolaiGogol` | roadmap |
 
 `@terra` is the only host reached directly over SSH by default. The inner hosts
@@ -111,6 +111,23 @@ make unit         # repository + role unit tests (tests/unit)
 A re-run of `make run-terra` on an already-bootstrapped device should report no
 changes, which is the idempotency guarantee the layered model relies on.
 
+#### Development shell (Nix flake)
+
+A pinned dev shell provides the test/lint tooling without depending on the host:
+
+```sh
+nix develop .            # or `nix develop path:.` before flake.nix is committed
+make unit                # 52 unit tests
+make check               # syntax-check all four playbooks
+make lint                # ansible-lint
+```
+
+It pins nixpkgs through `flake.lock` and bundles Python 3.13 with
+pytest/PyYAML/Jinja2, `ansible-core`, `ansible-lint`, and the `ansible.posix` /
+`community.docker` collections. Docker is intentionally not provided, so the
+`make it-*` and `make e2e` targets still need a Docker host; `ansible-lint`
+fetches the external `danielrolls.nix` role (git + network) on first run.
+
 To exercise the roles without touching the NAS, run them against a mock `@terra`
 (Ubuntu-22.04 systemd container):
 
@@ -136,6 +153,83 @@ integration, E2E, manual) and
 [`docs/HomeServer__HomeAssistant_plan.md`](./docs/HomeServer__HomeAssistant_plan.md)
 for the per-step test matrix.
 
+### Layer 1 — `@NikolaiGogol` (NixOS system container)
+
+`deploy-nikolaigogol.yml` takes the NixOS system-container rootfs built on the
+workstation, pushes it to `@terra`, imports it into Docker and starts it as a
+privileged systemd container (the same container
+`ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol` starts by hand).
+
+It is content-addressed: the image tag is the first 12 hex characters of the
+tarball's sha256, so "is this image present?" is meaningful and a re-run is a
+no-op when nothing changed. Roles, in order, by tag:
+
+- `image` — `nixos_image_artifact` (locate + checksum the artifact on the
+  control node) → `nixos_image_sync` (rsync `--checksum` to
+  `/var/tmp/nixos-images/<sha256>.tar.xz`) → `nixos_image_load` (`docker import`
+  gated on `docker image inspect`).
+- `container` — `nixos_container` (render `docker-compose-system.yml` + `.env`
+  from `group_vars/nikolaigogol/vars.yml`, ensure the mount sources, `docker
+  compose up -d`; a handler recreates the container when the config changes).
+- `edge_sync` — optional, **off by default** fast-iteration helper (see below).
+
+**Prerequisites**
+
+- The image build on the workstation (control node):
+  `make --directory=~/.bookmarks/shared-configs/Unix_dotfiles build-NikolaiGogol`
+  → `result-NikolaiGogol/tarball/nixos-system-x86_64-linux.tar.xz`.
+- `rsync` on `@terra` (the role can install it via apt with
+  `nixos_image_sync_install_rsync=true`, otherwise it fails early with guidance).
+- Review `group_vars/nikolaigogol/vars.yml` — the mount roots are placeholders
+  until the real TOS volume layout is confirmed.
+
+**Two speeds, both idempotent**
+
+```sh
+# Fast loop while iterating: edit Unix_dotfiles, rebuild, redeploy only what
+# changed. A new sha tag triggers import + recreate; nothing else changes.
+make --directory=~/.bookmarks/shared-configs/Unix_dotfiles build-NikolaiGogol
+make -f Makefile.NixosImage run
+make -f Makefile.NixosContainer run
+
+# Whole layer, no-op when already converged
+make -f Makefile.NixosImage run
+make -f Makefile.NixosContainer run
+```
+
+The per-step makefiles are thin wrappers over `deploy-nikolaigogol.yml`
+(`STEP_TAGS := image` / `container`). They accept the shared targets
+(`run`, `dry`, `verify`, `up`, `down`, `shell-ssh`, `logs`, `clean`) and
+`INVENTORY=tests/integration/inventory.ini` for the mock. `Makefile.NixosContainer`
+adds `connect-container`, `ssh-container` and `ps`.
+
+**Verify and connect**
+
+```sh
+make -f Makefile.NixosContainer verify          # verify-nikolaigogol.yml
+make -f Makefile.NixosContainer connect-container  # shell inside the container
+make -f Makefile.NixosContainer ssh-container      # direct SSH (port 2223)
+```
+
+`make check` syntax-checks both Layer-0 and Layer-1 playbooks.
+
+**Optional edge iteration (`nixos_edge_sync`, off by default)**
+
+If you decide the TOS host needs it, this helper rsyncs the local
+`Unix_dotfiles` checkout into the container's bind mount and runs
+`nixos-rebuild switch --flake` inside the running container:
+
+```sh
+make -f Makefile.NixosEdgeSync run EXTRA_ARGS='-e nixos_edge_sync_enabled=true'
+```
+
+It is inert unless `nixos_edge_sync_enabled=true`; the canonical path stays
+"rebuild the artifact, redeploy".
+
+See
+[`docs/HomeServer__StratoFrame__ConvPlatProv__NikolaiGogolDeployment_plan.md`](./docs/HomeServer__StratoFrame__ConvPlatProv__NikolaiGogolDeployment_plan.md)
+for the full plan, testing matrix and rollback.
+
 ### Backups
 
 `backup_tos` writes a timestamped archive and manifest under
@@ -146,15 +240,18 @@ TerraMaster's own configuration export.
 
 ### Inner hosts (roadmap)
 
-`@NikolaiGogol` and `@Manilov` are not deployed yet. Their inventory groups and
-placeholder variables (`group_vars/nikolaigogol/`, `group_vars/manilov/`) exist
-so the next stages can be added as separate idempotent plays; see the plan.
+Layer 1 (`@NikolaiGogol`) is implemented by `deploy-nikolaigogol.yml` (see
+above). `@Manilov` (HomeAssistant OS VM) is still roadmap; its inventory group
+and placeholder variables (`group_vars/manilov/`) exist so the next stage can be
+added as a separate idempotent play; see the plan.
 
 ### Repository layout
 
 ```
 HomeServer__HomeAssistant.yml   # Layer-0 playbook for @terra
-verify-terra.yml                # idempotent checks
+deploy-nikolaigogol.yml         # Layer-1 playbook: NixOS system container
+verify-terra.yml                # idempotent Layer-0 checks
+verify-nikolaigogol.yml         # idempotent Layer-1 checks
 hosts.ini                       # local / terra / nikolaigogol / manilov
 group_vars/<host>/              # per-host values (+ encrypted vault)
 roles/backup_tos/               # snapshot TOS config before changes
@@ -162,6 +259,11 @@ roles/access_ssh/               # key-based SSH access
 roles/bootstrap_base/           # minimal base prerequisites
 roles/bootstrap_nix/            # Nix (multi-user)
 roles/bootstrap_docker/         # Docker detection / install
+roles/nixos_image_artifact/     # locate + checksum the image on the control node
+roles/nixos_image_sync/         # rsync the artifact to @terra
+roles/nixos_image_load/         # docker import on @terra
+roles/nixos_container/          # compose + env + mount/container lifecycle
+roles/nixos_edge_sync/          # optional fast-iteration helper (off by default)
 tests/                          # unit + integration tests (see tests/README.md)
 Makefile.Steps                  # shared manual-test targets
 Makefile.<Step>                 # per-step manual testing

@@ -8,3 +8,6 @@ roles:
 collections:
   # Container management for the layers running on @terra.
   - name: community.docker
+  # rsync-based transfer (ansible.posix.synchronize) for the @NikolaiGogol
+  # system-container image. See deploy-nikolaigogol.yml.
+  - name: ansible.posix

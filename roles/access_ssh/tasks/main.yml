@@ -29,7 +29,7 @@
   failed_when: false
 
 - name: Upload the public key using the account password
-  ansible.builtin.authorized_key:
+  ansible.posix.authorized_key:
     user: "{{ access_ssh_user }}"
     state: present
     key: "{{ access_ssh_public_key }}"

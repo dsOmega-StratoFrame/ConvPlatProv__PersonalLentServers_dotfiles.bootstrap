@@ -38,9 +38,11 @@ def test_packages_cover_engine_cli_and_containerd(defaults):
 
 
 def test_gpg_url_derives_from_base(defaults):
-    assert defaults["bootstrap_docker_gpg_url"] == (
-        defaults["bootstrap_docker_apt_base_url"] + "/gpg"
+    # The default is a Jinja expression deriving the URL from the base repo.
+    rendered = Template(defaults["bootstrap_docker_gpg_url"]).render(
+        bootstrap_docker_apt_base_url=defaults["bootstrap_docker_apt_base_url"]
     )
+    assert rendered == defaults["bootstrap_docker_apt_base_url"] + "/gpg"
 
 
 def test_apt_repo_line_renders_correctly(defaults):

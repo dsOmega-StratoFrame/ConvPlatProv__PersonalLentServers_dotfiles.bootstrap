@@ -33,7 +33,10 @@ def test_blocked_versions_cover_cve_2024_3094(defaults):
 
 
 def _is_blocked(stdout: str, blocked: list) -> bool:
-    return bool(Template(BLOCKED_EXPR).render(blocked=blocked, stdout=stdout))
+    # The expression renders to the string "True"/"False"; a bare bool() of it is
+    # always truthy, so compare explicitly.
+    rendered = Template(BLOCKED_EXPR).render(blocked=blocked, stdout=stdout)
+    return rendered.strip().lower() == "true"
 
 
 @pytest.mark.parametrize(

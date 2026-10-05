@@ -1,0 +1,52 @@
+---
+# Runs on the control node. Validate inputs, locate + checksum the artifact and
+# publish the facts the sync/load/container roles consume.
+
+- name: Validate the artifact inputs
+  ansible.builtin.assert:
+    that:
+      - nixos_image_artifact_source_dir | length > 0
+      - nixos_image_artifact_system_name | length > 0
+      - nixos_image_artifact_archive_relative | length > 0
+      - nixos_image_artifact_tag_length | int > 0
+    fail_msg: >-
+      nixos_image_artifact_* inputs are incomplete; check
+      group_vars/nikolaigogol/vars.yml.
+  delegate_to: localhost
+  become: false
+
+- name: Locate the NixOS image artifact on the control node
+  ansible.builtin.stat:
+    path: "{{ nixos_image_artifact_source_dir }}/{{ nixos_image_artifact_archive_relative }}"
+    checksum_algorithm: "{{ nixos_image_artifact_checksum_algorithm }}"
+  delegate_to: localhost
+  become: false
+  register: nixos_image_artifact_stat
+
+- name: Fail early when the artifact is missing
+  ansible.builtin.fail:
+    msg: >-
+      NixOS image artifact not found:
+      {{ nixos_image_artifact_source_dir }}/{{ nixos_image_artifact_archive_relative }}.
+      Build it on the control node first:
+      make --directory={{ nixos_image_artifact_source_dir }}
+      build-{{ nixos_image_artifact_system_name }}
+  when: not nixos_image_artifact_stat.stat.exists
+
+- name: Publish the artifact identity
+  ansible.builtin.set_fact:
+    nixos_image_artifact_archive: "{{ nixos_image_artifact_source_dir }}/{{ nixos_image_artifact_archive_relative }}"
+    nixos_image_artifact_checksum: "{{ nixos_image_artifact_stat.stat.checksum }}"
+    nixos_image_artifact_tag: "{{ nixos_image_artifact_stat.stat.checksum[: (nixos_image_artifact_tag_length | int)] }}"
+
+- name: Publish the content-addressed image name
+  ansible.builtin.set_fact:
+    nixos_image_artifact_image_name: "{{ nixos_image_artifact_image_repository }}:{{ nixos_image_artifact_tag }}"
+
+- name: Report the artifact identity
+  ansible.builtin.debug:
+    msg:
+      - "artifact: {{ nixos_image_artifact_archive }}"
+      - "sha256:   {{ nixos_image_artifact_checksum }}"
+      - "tag:      {{ nixos_image_artifact_tag }}"
+      - "image:    {{ nixos_image_artifact_image_name }}"

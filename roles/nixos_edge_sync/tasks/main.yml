@@ -1,0 +1,28 @@
+---
+# Inert unless nixos_edge_sync_enabled=true.
+
+- name: Report the edge-sync helper state
+  ansible.builtin.debug:
+    msg: >-
+      nixos_edge_sync is disabled (nixos_edge_sync_enabled=false); nothing to do.
+      Use the `image` + `container` tags for a normal deploy.
+
+- name: Sync the Unix_dotfiles checkout into the container bind mount
+  ansible.posix.synchronize:
+    src: "{{ nixos_edge_sync_source_dir }}/"
+    dest: "{{ nixos_edge_sync_remote_dir }}/"
+    mode: push
+    archive: true
+    delete: true
+    checksum: true
+    rsync_opts: "{{ nixos_edge_sync_rsync_opts }}"
+  when: nixos_edge_sync_enabled | bool
+
+- name: Rebuild the NixOS system inside the running container
+  ansible.builtin.command: >-
+    docker exec {{ nixos_edge_sync_container_name }}
+    nixos-rebuild switch
+    --flake {{ nixos_edge_sync_container_flake }}#{{ nixos_edge_sync_flake_attr }}
+  when: nixos_edge_sync_enabled | bool
+  changed_when: true
+  become: "{{ nixos_edge_sync_become }}"

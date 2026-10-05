@@ -17,7 +17,7 @@ Companion documents:
 | Layer-0 host | `@terra` — TerraMaster NAS, TOS 6 |
 | Nix installer role | `danielrolls.nix` (`danielrolls/nix-install`) |
 | Pinned commit | `7bef4db07967e433ca9bcf7c7de84eb87814583a` (Release with Nix 2.34.7) |
-| Collections | `community.docker` |
+| Collections | `community.docker`, `ansible.posix` (`synchronize`/rsync) |
 | Tooling gap | `ansible` is installed on the control node via `make install`; TOS 6 provides `systemd` and an Ubuntu-22.04-compatible rootfs |
 
 ## 2. Goal & target architecture
@@ -27,7 +27,7 @@ Three layered, independently idempotent units:
 | Layer | Host | Managed by |
 |---|---|---|
 | 0 | `@terra` (TOS 6) | this repo: backup → SSH access → base → Nix → Docker |
-| 1 | `@NikolaiGogol` (NixOS system container) | roadmap: deploy NixOS container image + compose |
+| 1 | `@NikolaiGogol` (NixOS system container) | this repo: `deploy-nikolaigogol.yml` — image sync + compose |
 | 2 | `@Manilov` (HomeAssistant OS VM) | roadmap: libvirt VM; config partly via Nix, partly volumes from `@terra` |
 
 `@terra` is the only default SSH target. `@NikolaiGogol` and `@Manilov` are
@@ -91,10 +91,34 @@ debugging.
   E2E-only); E2E — `make run TAGS=docker` and `make test`; manual —
   `make -f Makefile.DockerDeployment run`.
 
-### Phase 5 — Roadmap
-- `deploy-nikolaigogol.yml`: import a NixOS system-container image and start it
-  with `docker-compose-system.yml` (see
-  `ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol`).
+### Phase 5 — `@NikolaiGogol` system container — **implemented**
+- `deploy-nikolaigogol.yml` (targets `terra`, pulls in `group_vars/nikolaigogol`
+  via `vars_files`) implements the full path from the workstation build to a
+  running privileged systemd container:
+  - `image` tag — `nixos_image_artifact` (locate + sha256 + 12-hex content tag on
+    the control node), `nixos_image_sync` (rsync `--checksum` to
+    `/var/tmp/nixos-images/<sha256>.tar.xz`), `nixos_image_load`
+    (`docker import`, gated on `docker image inspect`).
+  - `container` tag — `nixos_container` renders `docker-compose-system.yml` +
+    `.env` from `group_vars`, ensures the mount sources (directory mounts are
+    created, file mounts fail-closed) and runs `community.docker.docker_compose_v2`;
+    a handler recreates the container on config change.
+  - `edge_sync` tag — optional, off-by-default helper (`nixos_edge_sync`).
+- `verify-nikolaigogol.yml` checks the image, the running container and
+  `nixos-version` inside it.
+- **Tests:** unit — `tests/unit/test_nixos_image_step.py` (tag derivation, no
+  moving tags, compose/env render invariants, sync/load defaults);
+  structure — `test_repo_structure.py` now validates the Layer-1 playbook;
+  integration — `tests/integration/playbook.yml` runs `TAGS=image` and
+  `TAGS=container` against the mock (import/compose skipped without a daemon);
+  E2E — `make -f Makefile.NixosImage run` then `Makefile.NixosContainer run`,
+  `verify`; manual — `Makefile.NixosImage`, `Makefile.NixosContainer`,
+  `Makefile.NixosEdgeSync`.
+- Open risk: the mount roots in `group_vars/nikolaigogol/vars.yml` are
+  placeholders until the real TOS volume layout is confirmed; direct SSH to the
+  container (port 2223) needs the `Unix_dotfiles` sshd wiring.
+
+### Phase 6 — Roadmap
 - `deploy-manilov.yml`: provision the HomeAssistant OS VM (libvirt) and hoist
   configuration volumes from `@terra`.
 - `configure-services.yml`: service-level configuration once both layers run.
@@ -107,7 +131,10 @@ debugging.
 
 - Playbook: `HomeServer__HomeAssistant.yml` (Layer 0), tagged
   `backup`, `access`, `base`, `nix`, `docker`.
-- Verification: `verify-terra.yml`.
+- Playbook: `deploy-nikolaigogol.yml` (Layer 1, targets `terra`), tagged
+  `image`, `container`, `edge_sync`.
+- Verification: `verify-terra.yml` (Layer 0), `verify-nikolaigogol.yml`
+  (Layer 1).
 - Role contracts: each role declares its variables in `defaults/main.yml`;
   `group_vars/<host>/vars.yml` supplies values; secrets use the `vault_*`
   indirection.
@@ -151,7 +178,8 @@ Four layers, cheapest first:
 2. Whether `become`/`sudo` is required for the `terra` account.
 3. Whether Docker is pre-installed and on which path.
 4. Whether Nix sandboxing works on the TOS 6 kernel.
-5. `@terra` reachability (`ansible_host`) and the deployment key path.
+5. `@terra` reachability: the connection host comes from the inventory
+   (`terra-local`); confirm it resolves on the control node.
 
 ## 10. Testing per step (matrix)
 
@@ -165,6 +193,9 @@ layer does not add signal for that step.
 | base (`base`) | structure tests | `make it-run TAGS=base` | `make run TAGS=base` | `Makefile.Steps` (via any) |
 | nix (`nix`) | — | `make it-run TAGS=nix` | `make run TAGS=nix` | `Makefile.NixBootstrap` |
 | docker (`docker`) | `test_docker_step.py` | `make it-run TAGS=docker` | `make run TAGS=docker`, `make test` | `Makefile.DockerDeployment` |
+| image (`image`) | `test_nixos_image_step.py` | `make it-run TAGS=image` | `make -f Makefile.NixosImage run` | `Makefile.NixosImage` |
+| container (`container`) | `test_nixos_image_step.py` | `make it-run TAGS=container` | `make -f Makefile.NixosContainer run`, `... verify` | `Makefile.NixosContainer` |
+| edge_sync (`edge_sync`) | structure tests | — (inert by default) | `... run EXTRA_ARGS='-e nixos_edge_sync_enabled=true'` | `Makefile.NixosEdgeSync` |
 
 Test-layer definitions and usage live in [`../tests/README.md`](../tests/README.md).
 

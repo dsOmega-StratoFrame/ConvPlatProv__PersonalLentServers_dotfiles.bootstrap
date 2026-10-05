@@ -1,0 +1,32 @@
+---
+# Layer 1 — @NikolaiGogol: the NixOS system container on @terra.
+#
+# The rootfs artifact is built on the control node (Unix_dotfiles), pushed to
+# @terra, imported into Docker and started as a privileged systemd container.
+#
+# Wiring note: this play targets `terra` (the Docker host), so Ansible does not
+# auto-load group_vars/nikolaigogol; it is pulled in explicitly with vars_files.
+#
+# Tags:
+#   image      artifact -> sync -> load (control node + @terra import)
+#   container  render compose/env, ensure mounts, (re)create the container
+#   edge_sync  optional, inert helper (roles/nixos_edge_sync, off by default)
+#
+# See docs/HomeServer__StratoFrame__ConvPlatProv__NikolaiGogolDeployment_plan.md.
+- name: Deploy @NikolaiGogol (NixOS system container) on @terra
+  hosts: terra
+  gather_facts: true
+  vars_files:
+    - group_vars/nikolaigogol/vars.yml
+  roles:
+    - role: nixos_image_artifact
+      tags: [image]
+    - role: nixos_image_sync
+      tags: [image]
+    - role: nixos_image_load
+      tags: [image]
+    - role: nixos_container
+      tags: [container]
+    # Optional fast-iteration helper; inert unless nixos_edge_sync_enabled=true.
+    - role: nixos_edge_sync
+      tags: [edge_sync]

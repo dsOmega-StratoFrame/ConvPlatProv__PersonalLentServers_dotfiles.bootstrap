@@ -1,0 +1,18 @@
+---
+# nixos_image_load — `docker import` the staged rootfs tarball into @terra's
+# Docker daemon, tagged with the content-addressable tag.
+#
+# Gated on `docker image inspect`, so a present image is never re-imported
+# (`docker import` always yields a new image id). A rootfs import intentionally
+# has no ENTRYPOINT/STOPSIGNAL — the compose template supplies `command: /init`
+# and `stop_signal: SIGRTMIN+3`.
+nixos_image_load_docker_binary: "docker"
+nixos_image_load_image_repository: "{{ nixos_image_repository | default('ds-omega/nikolai-gogol') }}"
+nixos_image_load_image_tag: "{{ nixos_image_tag | default(nixos_image_artifact_tag | default('')) }}"
+nixos_image_load_remote_archive: "{{ nixos_image_sync_remote_archive | default('') }}"
+# Set false where no Docker daemon is available (e.g. the integration mock) to
+# exercise the wiring without importing.
+nixos_image_load_manage: true
+# `docker import` needs root (or docker-group membership) on TOS.
+nixos_image_load_become: true
+nixos_image_load_force: false

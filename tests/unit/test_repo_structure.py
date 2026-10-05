@@ -5,6 +5,12 @@ any Python environment with pytest + PyYAML. They catch the refactor mistakes
 that would otherwise only surface on a live run: dangling role references, roles
 missing their interface, unpinned dependencies, unnamespaced variables and
 secrets that are no longer ignored.
+
+They cover both playbooks:
+
+* ``HomeServer__HomeAssistant.yml`` — Layer 0 on ``@terra``.
+* ``deploy-nikolaigogol.yml`` — Layer 1: the ``@NikolaiGogol`` NixOS system
+  container on ``@terra``.
 """
 from __future__ import annotations
 
@@ -16,7 +22,9 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 PLAYBOOK = REPO / "HomeServer__HomeAssistant.yml"
+DEPLOY_PLAYBOOK = REPO / "deploy-nikolaigogol.yml"
 VERIFY_PLAYBOOK = REPO / "verify-terra.yml"
+VERIFY_NIKOLAIGOGOL_PLAYBOOK = REPO / "verify-nikolaigogol.yml"
 REQUIREMENTS = REPO / "requirements.yml"
 ROLES_DIR = REPO / "roles"
 
@@ -33,9 +41,42 @@ def role_names(play: dict) -> list[str]:
     return names
 
 
+def role_tags(play: dict) -> dict[str, list[str]]:
+    tags: dict[str, list[str]] = {}
+    for entry in play.get("roles", []):
+        if isinstance(entry, str):
+            tags[entry] = []
+        else:
+            tags[entry["role"]] = entry.get("tags", [])
+    return tags
+
+
+def assert_roles_valid(play: dict) -> None:
+    """A referenced role must exist, expose its interface and namespace its vars."""
+    names = role_names(play)
+    assert names, "playbook declares no roles"
+    for name in names:
+        role_dir = ROLES_DIR / name
+        assert role_dir.is_dir(), f"playbook references missing role '{name}'"
+        assert (role_dir / "tasks" / "main.yml").is_file(), f"{name}: no tasks/main.yml"
+        assert (role_dir / "defaults" / "main.yml").is_file(), f"{name}: no defaults/main.yml"
+
+        defaults = load(role_dir / "defaults" / "main.yml") or {}
+        assert defaults, f"{name}: defaults are empty"
+        for key in defaults:
+            assert key.startswith(name), (
+                f"{name}: variable '{key}' is not namespaced with the role name"
+            )
+
+
 @pytest.fixture(scope="module")
 def play() -> dict:
     return load(PLAYBOOK)[0]
+
+
+@pytest.fixture(scope="module")
+def deploy_play() -> dict:
+    return load(DEPLOY_PLAYBOOK)[0]
 
 
 def test_playbook_targets_terra(play):
@@ -69,6 +110,43 @@ def test_verify_playbook_targets_terra():
     assert load(VERIFY_PLAYBOOK)[0]["hosts"] == "terra"
 
 
+def test_verify_nikolaigogol_targets_terra():
+    assert load(VERIFY_NIKOLAIGOGOL_PLAYBOOK)[0]["hosts"] == "terra"
+
+
+def test_deploy_nikolaigogol_targets_terra(deploy_play):
+    assert deploy_play["hosts"] == "terra"
+    assert deploy_play["gather_facts"] is True
+
+
+def test_deploy_nikolaigogol_loads_container_vars(deploy_play):
+    # The play targets @terra, so group_vars/nikolaigogol does not auto-load;
+    # the file is pulled in explicitly and must stay a real interface.
+    assert "group_vars/nikolaigogol/vars.yml" in deploy_play.get("vars_files", [])
+
+
+def test_deploy_nikolaigogol_roles_valid(deploy_play):
+    assert_roles_valid(deploy_play)
+
+
+def test_deploy_nikolaigogol_role_order(deploy_play):
+    assert role_names(deploy_play) == [
+        "nixos_image_artifact",
+        "nixos_image_sync",
+        "nixos_image_load",
+        "nixos_container",
+        "nixos_edge_sync",
+    ]
+
+
+def test_deploy_nikolaigogol_role_tags(deploy_play):
+    tags = role_tags(deploy_play)
+    for name in ("nixos_image_artifact", "nixos_image_sync", "nixos_image_load"):
+        assert "image" in tags[name], f"{name}: missing 'image' tag"
+    assert "container" in tags["nixos_container"]
+    assert "edge_sync" in tags["nixos_edge_sync"]
+
+
 def test_roles_are_pinned_to_commits():
     req = load(REQUIREMENTS) or {}
     roles = req.get("roles") or []
@@ -87,6 +165,7 @@ def test_expected_collections_declared():
         for c in (req.get("collections") or [])
     ]
     assert "community.docker" in names
+    assert "ansible.posix" in names
 
 
 def test_secrets_are_git_ignored():

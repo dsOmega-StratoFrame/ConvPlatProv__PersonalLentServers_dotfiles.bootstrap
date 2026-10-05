@@ -14,7 +14,9 @@
       register: verify_docker
       changed_when: false
 
-    - name: Check the Docker daemon
+    # A read-only status probe, not service management, so the systemd module
+    # does not apply.
+    - name: Check the Docker daemon  # noqa: command-instead-of-module
       ansible.builtin.command: "systemctl is-active docker"
       register: verify_docker_daemon
       changed_when: false

@@ -1,0 +1,52 @@
+---
+# Idempotent verification of the @NikolaiGogol layer. Read-only docker commands;
+# safe to run any time. Mirrors verify-terra.yml for Layer 1.
+#
+# Resolves the image from the *running container* (Config.Image) rather than from
+# a freshly derived content tag, so it works as a standalone check after a
+# deploy or a reboot.
+- name: Verify @NikolaiGogol deployment
+  hosts: terra
+  gather_facts: false
+  vars_files:
+    - group_vars/nikolaigogol/vars.yml
+  tasks:
+    - name: Inspect the system container
+      ansible.builtin.command: "{{ nixos_container_docker_binary }} inspect {{ nixos_container_name }}"
+      register: verify_nikolaigogol_inspect
+      changed_when: false
+      failed_when: false
+      become: "{{ nixos_container_become }}"
+
+    - name: Fail when the container does not exist
+      ansible.builtin.fail:
+        msg: "Container {{ nixos_container_name }} does not exist on {{ inventory_hostname }}."
+      when: verify_nikolaigogol_inspect.rc != 0
+
+    - name: Record the container state and image reference
+      ansible.builtin.set_fact:
+        verify_nikolaigogol_state: "{{ (verify_nikolaigogol_inspect.stdout | from_json)[0].State.Status }}"
+        verify_nikolaigogol_image_ref: "{{ (verify_nikolaigogol_inspect.stdout | from_json)[0].Config.Image }}"
+
+    - name: Fail when the container is not running
+      ansible.builtin.fail:
+        msg: "Container {{ nixos_container_name }} is '{{ verify_nikolaigogol_state }}', not running."
+      when: verify_nikolaigogol_state != 'running'
+
+    - name: Check the image the container runs is present
+      ansible.builtin.command: "{{ nixos_container_docker_binary }} image inspect {{ verify_nikolaigogol_image_ref }}"
+      changed_when: false
+      become: "{{ nixos_container_become }}"
+
+    - name: Check the NixOS version inside the container
+      ansible.builtin.command: "{{ nixos_container_docker_binary }} exec {{ nixos_container_name }} /run/current-system/sw/bin/nixos-version"
+      register: verify_nikolaigogol_version
+      changed_when: false
+      become: "{{ nixos_container_become }}"
+
+    - name: Report verification results
+      ansible.builtin.debug:
+        msg:
+          - "image:         {{ verify_nikolaigogol_image_ref }}"
+          - "container:     {{ nixos_container_name }} ({{ verify_nikolaigogol_state }})"
+          - "nixos-version: {{ verify_nikolaigogol_version.stdout }}"

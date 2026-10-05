@@ -1,0 +1,82 @@
+---
+# Runs against @terra. The source lives on the control node (produced by
+# nixos_image_artifact); synchronize runs rsync locally and pushes over SSH.
+
+- name: Require the artifact facts from nixos_image_artifact
+  ansible.builtin.assert:
+    that:
+      - nixos_image_artifact_archive is defined
+      - nixos_image_artifact_checksum is defined
+      - nixos_image_artifact_checksum | length > 0
+    fail_msg: >-
+      nixos_image_artifact did not run (no archive/checksum fact). Run the
+      `image` tag, or set nixos_image_tag explicitly to skip the image pipeline.
+
+- name: Define the content-addressed staging path
+  ansible.builtin.set_fact:
+    nixos_image_sync_remote_archive: "{{ nixos_image_sync_remote_dir }}/{{ nixos_image_artifact_checksum }}.tar.xz"
+
+- name: Detect rsync on @terra
+  ansible.builtin.command: "command -v rsync"
+  register: nixos_image_sync_rsync_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail early when rsync is missing and installation is not allowed
+  ansible.builtin.fail:
+    msg: >-
+      rsync is not installed on {{ inventory_hostname }} and
+      nixos_image_sync_install_rsync is false. Install rsync on the NAS, or set
+      nixos_image_sync_install_rsync=true to let the role install it via apt.
+  when:
+    - nixos_image_sync_require_rsync
+    - nixos_image_sync_rsync_check.rc != 0
+    - not nixos_image_sync_install_rsync
+
+- name: Fail when rsync installation is requested but unsupported
+  ansible.builtin.fail:
+    msg: >-
+      Automatic rsync installation is only implemented for the Debian family;
+      {{ inventory_hostname }} reports '{{ ansible_os_family }}'. Install rsync
+      manually or set nixos_image_sync_require_rsync=false.
+  when:
+    - nixos_image_sync_require_rsync
+    - nixos_image_sync_rsync_check.rc != 0
+    - nixos_image_sync_install_rsync
+    - ansible_os_family != 'Debian'
+
+- name: Install rsync when missing and permitted
+  ansible.builtin.apt:
+    name: rsync
+    state: present
+    update_cache: true
+  when:
+    - nixos_image_sync_require_rsync
+    - nixos_image_sync_rsync_check.rc != 0
+    - nixos_image_sync_install_rsync
+    - ansible_os_family == 'Debian'
+
+- name: Ensure the staging directory exists on @terra
+  ansible.builtin.file:
+    path: "{{ nixos_image_sync_remote_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Transfer the image artifact to @terra (rsync --checksum)
+  ansible.posix.synchronize:
+    src: "{{ nixos_image_artifact_archive }}"
+    dest: "{{ nixos_image_sync_remote_archive }}"
+    mode: push
+    archive: false
+    checksum: "{{ nixos_image_sync_checksum }}"
+    compress: "{{ nixos_image_sync_compress }}"
+    delete: "{{ nixos_image_sync_delete }}"
+    dest_port: "{{ nixos_image_sync_dest_port }}"
+    rsync_opts: "{{ nixos_image_sync_rsync_opts }}"
+  register: nixos_image_sync_result
+
+- name: Report the staging result
+  ansible.builtin.debug:
+    msg:
+      - "staged:  {{ nixos_image_sync_remote_archive }}"
+      - "changed: {{ nixos_image_sync_result.changed | default(false) }}"

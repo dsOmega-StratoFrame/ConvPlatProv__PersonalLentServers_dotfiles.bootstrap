@@ -1,0 +1,33 @@
+# Manual testing for the @NikolaiGogol system container (role: nixos_container)
+# — the `container` tag of deploy-nikolaigogol.yml — plus connection helpers.
+#
+# See Makefile.Steps for the shared targets (run/dry/verify/up/down/shell/
+# shell-ssh/logs/clean) and INVENTORY selection.
+STEP_TAGS := container
+PLAYBOOK := deploy-nikolaigogol.yml
+VERIFY_PLAYBOOK := verify-nikolaigogol.yml
+
+# Parameters for the extra helpers below.
+CONTAINER_NAME ?= HomeServer__HomeAssistant.NikolaiGogol
+CONTAINER_USER ?= ds13
+CONTAINER_PROJECT_DIR ?= /var/lib/nikolaigogol
+CONTAINER_SSH_PORT ?= 2223
+CONTAINER_SSH_HOST ?= terra-local
+
+.PHONY: connect-container ssh-container ps
+
+# Shell inside the running container, through @terra (sudo docker exec), i.e.
+# the ad-hoc debugging path: ssh @terra && docker exec -it --user ds13 ...
+connect-container:
+	ssh $(SSH_TARGET) "sudo docker exec -it --user $(CONTAINER_USER) $(CONTAINER_NAME) /run/current-system/sw/bin/bash"
+
+# Direct SSH to the container's sshd (debugging override; requires the
+# Unix_dotfiles sshd wiring described in the deployment plan §10).
+ssh-container:
+	ssh -p $(CONTAINER_SSH_PORT) $(CONTAINER_USER)@$(CONTAINER_SSH_HOST)
+
+# Compose status on @terra.
+ps:
+	ssh $(SSH_TARGET) "sudo docker compose -f $(CONTAINER_PROJECT_DIR)/docker-compose-system.yml ps"
+
+include Makefile.Steps

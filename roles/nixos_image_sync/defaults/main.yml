@@ -1,0 +1,17 @@
+---
+# nixos_image_sync — push the rootfs artifact from the control node to @terra's
+# staging directory. Idempotent: rsync with --checksum skips unchanged files, so
+# a re-run reports no change.
+#
+# The destination is named after the artifact sha256, so it is content-addressed
+# and never overwrites an unrelated build.
+nixos_image_sync_remote_dir: "/var/tmp/nixos-images"
+nixos_image_sync_checksum: true
+nixos_image_sync_compress: false
+nixos_image_sync_delete: false
+nixos_image_sync_dest_port: "{{ ansible_port | default(22) }}"
+nixos_image_sync_rsync_opts: []
+# rsync must exist on both ends. Install it with apt only when asked; otherwise
+# fail early with guidance.
+nixos_image_sync_require_rsync: true
+nixos_image_sync_install_rsync: false

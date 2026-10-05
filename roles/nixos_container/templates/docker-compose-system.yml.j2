@@ -1,0 +1,28 @@
+{#
+  docker-compose-system.yml.j2 — privileged NixOS system container.
+
+  Rendered by roles/nixos_container from group_vars/nikolaigogol/vars.yml.
+  Source of truth: ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol/
+  docker-compose-system.yml. Identity values come from the rendered .env;
+  mount sources are data-driven from `nixos_container_mounts`.
+#}
+services:
+  {{ nixos_container_service_name }}:
+    image: ${IMAGE_NAME}
+    # Local image, imported by roles/nixos_image_load — never pulled.
+    pull_policy: ${PULL_POLICY:-never}
+    container_name: ${CONTAINER_NAME}
+    privileged: true
+    cgroup_parent: {{ nixos_container_cgroup_parent }}
+    cgroup: host
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - seccomp=unconfined
+    stop_signal: SIGRTMIN+3
+    volumes:
+{% for mount in nixos_container_mounts %}
+      - {{ mount.source }}:{{ mount.target }}
+{% endfor %}
+    command: /init # Boots into systemd

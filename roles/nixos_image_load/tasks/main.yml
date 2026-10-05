@@ -1,0 +1,52 @@
+---
+# Runs against @terra. Import is the only mutating step of the `image` tag.
+
+- name: Import the image into Docker
+  when: nixos_image_load_manage | bool
+  block:
+    - name: Validate the load inputs
+      ansible.builtin.assert:
+        that:
+          - nixos_image_load_image_repository | length > 0
+          - nixos_image_load_image_tag | length > 0
+          - nixos_image_load_remote_archive | length > 0
+        fail_msg: >-
+          nixos_image_load_image_tag is empty or the staging path is unknown. Run
+          the `image` tag, or set nixos_image_tag to a literal content tag in
+          group_vars/nikolaigogol/vars.yml.
+
+    - name: Define the image reference
+      ansible.builtin.set_fact:
+        nixos_image_load_image: "{{ nixos_image_load_image_repository }}:{{ nixos_image_load_image_tag }}"
+
+    - name: Check whether the image is already loaded
+      ansible.builtin.command: "{{ nixos_image_load_docker_binary }} image inspect {{ nixos_image_load_image }}"
+      register: nixos_image_load_inspect
+      changed_when: false
+      failed_when: false
+      become: "{{ nixos_image_load_become }}"
+
+    - name: Import the rootfs tarball into Docker
+      ansible.builtin.command: "{{ nixos_image_load_docker_binary }} import {{ nixos_image_load_remote_archive }} {{ nixos_image_load_image }}"
+      when: nixos_image_load_inspect.rc != 0 or nixos_image_load_force
+      register: nixos_image_load_import
+      changed_when: true
+      become: "{{ nixos_image_load_become }}"
+
+    - name: Verify the image is present
+      ansible.builtin.command: "{{ nixos_image_load_docker_binary }} image inspect {{ nixos_image_load_image }}"
+      register: nixos_image_load_verify
+      changed_when: false
+      become: "{{ nixos_image_load_become }}"
+
+    - name: Report the load result
+      ansible.builtin.debug:
+        msg:
+          - "image:    {{ nixos_image_load_image }}"
+          - "present:  {{ nixos_image_load_verify.rc == 0 }}"
+          - "imported: {{ nixos_image_load_import is defined and nixos_image_load_import.changed | default(false) }}"
+
+- name: Report that the image import was skipped
+  ansible.builtin.debug:
+    msg: "nixos_image_load_manage=false; skipped docker import (no daemon expected)."
+  when: not (nixos_image_load_manage | bool)
