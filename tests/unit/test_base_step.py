@@ -13,6 +13,7 @@ from jinja2 import Template
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULTS_PATH = REPO / "roles" / "bootstrap_base" / "defaults" / "main.yml"
+TASKS_PATH = REPO / "roles" / "bootstrap_base" / "tasks" / "dependencies.yml"
 
 # Mirrors the `when:` expression in roles/bootstrap_base/tasks/dependencies.yml.
 BLOCKED_EXPR = "{{ blocked | select('in', stdout) | list | length > 0 }}"
@@ -30,6 +31,33 @@ def test_required_commands_cover_nix_prerequisites(defaults):
 def test_blocked_versions_cover_cve_2024_3094(defaults):
     blocked = {str(v) for v in defaults["bootstrap_base_xz_blocked_versions"]}
     assert {"5.6.0", "5.6.1"} <= blocked
+
+
+def _find_task(tasks: list, needle: str) -> dict:
+    for task in tasks:
+        if needle in (task.get("name") or ""):
+            return task
+    raise AssertionError(f"no task containing {needle!r}")
+
+
+def test_apt_install_is_gated_on_pkg_mgr_not_os_family():
+    # TOS 6 reports os_family=OtherLinux but pkg_mgr=apt.
+    tasks = yaml.safe_load(TASKS_PATH.read_text())
+    apt = _find_task(tasks, "Install base packages (apt)")
+    assert "ansible_facts['pkg_mgr'] == 'apt'" in apt["when"]
+    generic = _find_task(tasks, "Install base packages (generic)")
+    assert "ansible_facts['pkg_mgr'] != 'apt'" in generic["when"]
+
+
+def test_fail_path_rechecks_after_the_install_attempt():
+    """The old fail task fired on the pre-install snapshot even when the generic
+    install had succeeded; it must now key on the post-install recheck."""
+    tasks = yaml.safe_load(TASKS_PATH.read_text())
+    assert any(
+        "Re-detect required commands" in (task.get("name") or "") for task in tasks
+    ), "missing post-install re-detect task"
+    fail = _find_task(tasks, "Fail when prerequisites are still missing")
+    assert "bootstrap_base_still_missing_commands | length > 0" in fail["when"]
 
 
 def _is_blocked(stdout: str, blocked: list) -> bool:

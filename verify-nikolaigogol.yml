@@ -17,6 +17,8 @@
       changed_when: false
       failed_when: false
       become: "{{ nixos_container_become }}"
+      # TOS 6: `root` is uid 9999 (unprivileged); target the configured user.
+      become_user: "{{ ansible_become_user | default('root') }}"
 
     - name: Fail when the container does not exist
       ansible.builtin.fail:
@@ -37,12 +39,16 @@
       ansible.builtin.command: "{{ nixos_container_docker_binary }} image inspect {{ verify_nikolaigogol_image_ref }}"
       changed_when: false
       become: "{{ nixos_container_become }}"
+      # TOS 6: `root` is uid 9999 (unprivileged); target the configured user.
+      become_user: "{{ ansible_become_user | default('root') }}"
 
     - name: Check the NixOS version inside the container
       ansible.builtin.command: "{{ nixos_container_docker_binary }} exec {{ nixos_container_name }} /run/current-system/sw/bin/nixos-version"
       register: verify_nikolaigogol_version
       changed_when: false
       become: "{{ nixos_container_become }}"
+      # TOS 6: `root` is uid 9999 (unprivileged); target the configured user.
+      become_user: "{{ ansible_become_user | default('root') }}"
 
     - name: Report verification results
       ansible.builtin.debug:

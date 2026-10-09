@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# bin/run-log — capture a command's combined output into a timestamped log.
+#
+# Usage: bin/run-log <label> <command> [args...]
+#
+# Every ansible-running Make target funnels through here so a run can be
+# reviewed after the fact without copy-paste. It writes
+#   $LOG_DIR/<YYYYmmddTHHMMSS>-<label>.log
+# (default LOG_DIR: <repo>/logs), refreshes $LOG_DIR/latest.log, and exits with
+# the wrapped command's status. Override LOG_DIR / LOG_FILE to redirect.
+set -o pipefail
+
+if [ "$#" -lt 2 ]; then
+  echo "usage: $(basename "$0") <label> <command> [args...]" >&2
+  exit 2
+fi
+
+label="$1"
+shift
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+log_dir="${LOG_DIR:-$repo_root/logs}"
+mkdir -p "$log_dir"
+log_file="${LOG_FILE:-$log_dir/$(date +%Y%m%dT%H%M%S)-${label}.log}"
+
+# tee makes stdout a pipe, which would make ansible drop its highlighting.
+# Force colour so the terminal keeps it; the stored log is de-ANSI'd below.
+# Respect an explicit ANSIBLE_FORCE_COLOR=0.
+export ANSIBLE_FORCE_COLOR="${ANSIBLE_FORCE_COLOR:-1}"
+
+# stdin stays attached, so interactive prompts still reach the terminal.
+"$@" 2>&1 | tee "$log_file"
+rc="${PIPESTATUS[0]}"
+
+# Keep the live terminal coloured, but store a clean log. Portable in-place
+# rewrite (no `sed -i`, whose flag differs between GNU and BSD sed).
+esc=$'\033'
+if sed "s/${esc}\[[0-9;?]*[A-Za-z]//g" "$log_file" > "${log_file}.clean" 2>/dev/null; then
+  mv "${log_file}.clean" "$log_file"
+else
+  rm -f "${log_file}.clean"
+fi
+
+ln -sf "$(basename "$log_file")" "$log_dir/latest.log"
+printf '\n[run-log] log: %s (exit %s)\n' "$log_file" "$rc" >&2
+exit "$rc"

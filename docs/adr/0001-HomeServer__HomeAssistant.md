@@ -107,6 +107,58 @@ The cross-repo contract for deriving that tag — one shared command
   systemd) rather than a bespoke script; this repo adds only the
   HomeServer-specific `nix.conf` settings and verification.
 
+### 8. TOS 6 privilege model — the SSH account is already uid 0
+
+On TOS 6 the first/admin account (`terra`, the SSH user / `ansible_user`) is
+**uid 0 and root-equivalent**, while the separate `root` account is **uid 9999
+and unprivileged** with an empty capability set. Confirmed on the live device via
+the verbose run log: after Ansible's `sudo -H -S ... -u root ... BECOME-SUCCESS`,
+the facts report `ansible_user_uid=9999`,
+`ansible_system_capabilities=[""]`, `SUDO_UID=0`, `SUDO_USER=terra`.
+
+Consequence: Ansible's default `become_user: root` runs `sudo -u root` and
+*drops* privileges (uid 0 → 9999), surfacing as confusing failures — apt cannot
+create `/var/lib/apt/lists/partial`, tar cannot read the root-only cron spool.
+
+Decision: **never assume `become_user: root` on TOS 6.** `group_vars/terra/vars.yml`
+pins `ansible_become: false` and `ansible_become_user: "terra"`; privileged
+Layer-1 tasks (nixos_image_load, nixos_container + handler, nixos_edge_sync,
+verify-nikolaigogol) set
+`become_user: "{{ ansible_become_user | default('root') }}"` explicitly, so any
+forced escalation targets the uid-0 account and not TOS's unprivileged `root`.
+
+Enforcement: the shared read-only preflight
+`tasks/preflight_privilege_model.yml` asserts `ansible_facts['user_uid'] == 0`
+and is imported from `pre_tasks` with `tags: [always]` in both
+`HomeServer__HomeAssistant.yml` and `deploy-nikolaigogol.yml`. It fails fast with
+guidance rather than surfacing later as apt/tar errors.
+
+### 8a. OS detection on TOS 6 — gate on `pkg_mgr`, not `os_family`
+
+Confirmed on the live device (verbose `gather_facts`,
+`logs/20261006T212942-access_ssh.log`): TOS 6 reports
+`ansible_distribution: OtherLinux`, `ansible_distribution_release: NA`,
+`ansible_distribution_version: NA`, `ansible_distribution_major_version: NA`,
+`ansible_os_family: OtherLinux`, and `ansible_pkg_mgr: apt`. TOS 6 is
+Ubuntu-22.04-compatible but does **not** identify as Debian/Ubuntu.
+
+Consequence: any `os_family == 'Debian'` (or `distribution*`-based) gate
+silently skips on TOS even though apt is present — the same failure class as
+Decision 8.
+
+Decision: package-management decisions **must** key on
+`ansible_facts['pkg_mgr'] == 'apt'` (`!=` for the non-apt path), never on
+`os_family == 'Debian'`. The `bootstrap_base` var lookup selects
+`vars/apt-family.yml` via the `{{ ansible_facts['pkg_mgr'] }}-family.yml`
+candidate (renamed from `Debian-family.yml`), with `default.yml` as the
+last-resort fallback. This applies to `bootstrap_base`, `access_sftp`,
+`nixos_image_sync`, and `bootstrap_docker`, and is guarded repo-wide by
+`test_roles_gate_package_management_on_pkg_mgr_not_os_family`.
+
+Docker's `jammy` apt suite is unaffected: it remains the correct Docker CE
+suite for TOS 6's Ubuntu-22.04 compatibility; only the install gate is keyed on
+`pkg_mgr`.
+
 ## Consequences
 
 **Positive**
@@ -118,10 +170,16 @@ The cross-repo contract for deriving that tag — one shared command
 
 **Negative / risks**
 
-- TOS is not a general-purpose distro: `ansible_distribution`, `become`
-  behaviour and Docker's install path must be confirmed on the first live run.
+- TOS is not a general-purpose distro: OS detection is now confirmed — TOS 6
+  reports `ansible_distribution`/`ansible_os_family` = `OtherLinux`
+  (release/version `NA`) while `ansible_pkg_mgr` = `apt`; package gates key on
+  `pkg_mgr`, never on `os_family == 'Debian'` (see Decision 8a). Docker's install
+  path on the NAS still remains to be confirmed on the first live run. `become`
+  behaviour is likewise confirmed — see Decision 8 (the SSH account is already
+  uid 0; escalate only to it, never to TOS's uid-9999 `root`).
 - The Ubuntu-`jammy` Docker fallback assumes TOS 6 keeps its Ubuntu-22.04
-  compatibility; `manual` mode is the escape hatch.
+  compatibility; `manual` mode is the escape hatch. This is a repository-suite
+  choice, not OS detection — the install gate is `pkg_mgr`-based (Decision 8a).
 - Nix sandboxing may be restricted by the NAS kernel.
 - De-provisioning is conservative: Docker is never removed unless this repo
   installed it.

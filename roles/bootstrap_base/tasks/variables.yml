@@ -9,6 +9,9 @@
       files:
         - "{{ ansible_facts['distribution'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
         - "{{ ansible_facts['distribution'] }}-family.yml"
+        # Package-manager family: TOS 6 reports os_family=OtherLinux but is
+        # apt-based, so an apt-family.yml must be selectable by pkg_mgr.
+        - "{{ ansible_facts['pkg_mgr'] }}-family.yml"
         - "{{ ansible_facts['os_family'] }}-family.yml"
         - default.yml
       paths:

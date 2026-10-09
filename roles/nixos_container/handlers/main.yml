@@ -12,3 +12,5 @@
     recreate: auto
   when: nixos_container_manage_compose
   become: "{{ nixos_container_become }}"
+  # TOS 6: `root` is uid 9999 (unprivileged); target the configured become user.
+  become_user: "{{ ansible_become_user | default('root') }}"

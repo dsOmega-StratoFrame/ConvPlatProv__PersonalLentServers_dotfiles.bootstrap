@@ -25,6 +25,9 @@
       changed_when: false
       failed_when: false
       become: "{{ nixos_image_load_become }}"
+      # TOS 6: `root` is uid 9999 (unprivileged); target the configured
+      # become user (the uid-0 admin account).
+      become_user: "{{ ansible_become_user | default('root') }}"
 
     - name: Import the rootfs tarball into Docker
       ansible.builtin.command: "{{ nixos_image_load_docker_binary }} import {{ nixos_image_load_remote_archive }} {{ nixos_image_load_image }}"
@@ -32,12 +35,18 @@
       register: nixos_image_load_import
       changed_when: true
       become: "{{ nixos_image_load_become }}"
+      # TOS 6: `root` is uid 9999 (unprivileged); target the configured
+      # become user (the uid-0 admin account).
+      become_user: "{{ ansible_become_user | default('root') }}"
 
     - name: Verify the image is present
       ansible.builtin.command: "{{ nixos_image_load_docker_binary }} image inspect {{ nixos_image_load_image }}"
       register: nixos_image_load_verify
       changed_when: false
       become: "{{ nixos_image_load_become }}"
+      # TOS 6: `root` is uid 9999 (unprivileged); target the configured
+      # become user (the uid-0 admin account).
+      become_user: "{{ ansible_become_user | default('root') }}"
 
     - name: Report the load result
       ansible.builtin.debug:

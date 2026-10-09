@@ -1,12 +1,20 @@
 ---
-# TOS 6's sshd_config declares
+# Ansible's sftp/scp transfer needs the binary named by sshd_config
 #   Subsystem sftp /usr/lib/openssh/sftp-server
-# but the package that provides that binary is not installed, so Ansible's
-# sftp (and, on OpenSSH >= 9.0 control nodes, its scp fallback) fail and it
-# silently falls back to the slower `piped` transfer. Installing the package
-# restores the fast sftp path without touching sshd_config.
+# When it is missing, Ansible's sftp (and, on OpenSSH >= 9.0 control nodes, its
+# scp fallback) fail and it silently falls back to the slower `piped` transfer.
+# On apt hosts this role installs the package that provides the binary, without
+# touching sshd_config. TerraMaster TOS 6 is the exception: it protects and pins
+# its OpenSSH packages and does not ship that path, so such hosts opt out (see
+# access_sftp_install below and group_vars/terra/vars.yml; plan §11).
 access_sftp_package: openssh-sftp-server
 access_sftp_server_path: /usr/lib/openssh/sftp-server
+# Whether to try to restore the binary. Opt out on hosts that prevent it: TOS 6
+# protects and pins its OpenSSH packages (so apt cannot install the package) and
+# its sshd `internal-sftp` path segfaults. Such hosts set this to false in
+# group_vars and select the `piped` transfer method via
+# ansible_ssh_transfer_method instead (see group_vars/terra/vars.yml).
+access_sftp_install: true
 # TOS 6 ships without this directory, which makes `apt-get update` (and the apt
 # module's update_cache) abort with "List directory .../partial is missing".
 # Recreate it before any apt call; a harmless no-op on healthy hosts.

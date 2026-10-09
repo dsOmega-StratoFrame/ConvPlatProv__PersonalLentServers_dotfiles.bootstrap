@@ -14,4 +14,6 @@ nixos_edge_sync_container_name: "{{ nixos_container_name | default('HomeServer__
 nixos_edge_sync_container_flake: "/home/{{ nixos_container_username | default('ds13') }}/.bookmarks/shared-configs/Unix_dotfiles"
 nixos_edge_sync_flake_attr: "NikolaiGogol"
 nixos_edge_sync_rsync_opts: ["--exclude=.git", "--exclude=result-*"]
+# Escalate to the configured become user (uid-0 admin on TOS 6), never the
+# unprivileged `root` account (uid 9999). See nixos_container defaults.
 nixos_edge_sync_become: true

@@ -1,0 +1,9 @@
+---
+# apt-based hosts (Debian/Ubuntu and TOS 6, which reports os_family=OtherLinux
+# but pkg_mgr=apt). Selected by pkg_mgr in tasks/variables.yml. Note the Debian
+# package name `xz-utils` (there is no `xz` package), unlike vars/default.yml.
+bootstrap_base_packages:
+  - curl
+  - xz-utils
+  - git
+  - jq

@@ -75,9 +75,11 @@ Other placements:
   so a second run reports no changes; that is the guarantee layered provisioning
   relies on.
 - **Tag every role** so it can be selected through the playbook/`dot-bootstrap`.
-- **Handle OS variance with data** (include vars keyed by
-  `ansible_os_family`/`ansible_distribution`), with a `default.yml` fallback —
-  TOS 6's reported distribution is not guaranteed.
+- **Handle OS variance with data**, but key package-management logic on the
+  package-manager fact (`ansible_facts['pkg_mgr']`, e.g. `apt`), **never** on
+  `os_family`/`ansible_distribution` — TOS 6 reports `os_family: OtherLinux`
+  while being apt-based, so a Debian gate would silently skip. Include vars keyed
+  by that fact, with a `default.yml` fallback; see ADR 0001 Decision 8a.
 - **Validate inputs early** with `fail` instead of letting a later task fail
   obscurely.
 - Start YAML files with `---`; give tasks descriptive names.

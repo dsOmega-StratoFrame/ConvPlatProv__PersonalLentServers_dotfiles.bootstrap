@@ -31,15 +31,17 @@
     bootstrap_docker_install_method == 'apt'
     or (bootstrap_docker_install_method == 'detect' and not bootstrap_docker_present)
   block:
-    - name: Fail when Docker CE cannot be installed on this OS family
+    # Gate on pkg_mgr, not os_family: TOS 6 reports os_family=OtherLinux but is
+    # apt-based, so an `os_family == 'Debian'` guard would abort the install.
+    - name: Fail when Docker CE cannot be installed on this host
       ansible.builtin.fail:
         msg: >-
-          Automatic Docker CE installation is only implemented for the Debian
-          family; {{ inventory_hostname }} reports
-          "{{ ansible_facts['os_family'] }}".
+          Automatic Docker CE installation is only implemented for apt hosts;
+          {{ inventory_hostname }} reports pkg_mgr
+          "{{ ansible_facts['pkg_mgr'] }}".
           Install Docker from the TOS App Center or set
           bootstrap_docker_install_method=manual.
-      when: ansible_facts['os_family'] != 'Debian'
+      when: ansible_facts['pkg_mgr'] != 'apt'
 
     - name: Ensure apt prerequisites for the Docker repository
       ansible.builtin.apt:

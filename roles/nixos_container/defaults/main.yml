@@ -39,4 +39,8 @@ nixos_container_mount_dir_mode: "0755"
 nixos_container_docker_binary: "docker"
 nixos_container_manage_compose: true
 nixos_container_validate: true
+# Escalate to the configured become user (group_vars/terra pins
+# `ansible_become_user` to the uid-0 admin account). On TOS 6 the `root`
+# account is uid 9999 and unprivileged, so defaulting to `root` would drop
+# privileges; the tasks set `become_user` explicitly for this reason.
 nixos_container_become: true

@@ -28,6 +28,21 @@ VERIFY_NIKOLAIGOGOL_PLAYBOOK = REPO / "verify-nikolaigogol.yml"
 REQUIREMENTS = REPO / "requirements.yml"
 ROLES_DIR = REPO / "roles"
 TERRA_VARS = REPO / "group_vars" / "terra" / "vars.yml"
+PREFLIGHT = "tasks/preflight_privilege_model.yml"
+PRIVILEGED_ROLES = ("nixos_container", "nixos_edge_sync", "nixos_image_load")
+
+
+def _iter_tasks(tasks):
+    """Yield every task dict, descending into block/rescue/always."""
+    if not isinstance(tasks, list):
+        return
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        yield task
+        for key in ("block", "rescue", "always"):
+            if key in task:
+                yield from _iter_tasks(task[key])
 
 
 def load(path: Path):
@@ -98,6 +113,61 @@ def test_terra_does_not_escalate_to_unprivileged_root():
     data = load(TERRA_VARS)
     assert data["ansible_become"] is False
     assert data["ansible_become_user"] == "terra"
+
+
+def _preflight_imports(play: dict) -> list[dict]:
+    out = []
+    for task in play.get("pre_tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        if PREFLIGHT in (
+            task.get("ansible.builtin.import_tasks"),
+            task.get("import_tasks"),
+        ):
+            out.append(task)
+    return out
+
+
+def test_deployable_plays_preflight_the_privilege_model():
+    """Both device-mutating plays must run the read-only privilege-model guard
+    before any role, and it must survive `--tags` filtering (tag `always`)."""
+    for playbook in (PLAYBOOK, DEPLOY_PLAYBOOK):
+        play = load(playbook)[0]
+        imports = _preflight_imports(play)
+        assert imports, f"{playbook.name} does not import {PREFLIGHT}"
+        for task in imports:
+            assert "always" in (task.get("tags") or []), (
+                f"{playbook.name}: {PREFLIGHT} import must be tagged 'always'"
+            )
+
+
+def test_preflight_asserts_root_equivalent_uid():
+    tasks = list(_iter_tasks(load(REPO / PREFLIGHT)))
+    assert tasks, "preflight declares no tasks"
+    assert any(
+        "ansible_facts['user_uid'] | int == 0"
+        in (task.get("ansible.builtin.assert", {}).get("that") or [])
+        for task in tasks
+    ), "preflight does not assert a root-equivalent uid"
+
+
+def test_privileged_roles_target_configured_become_user():
+    """TOS 6's `root` is uid 9999 (unprivileged); roles that escalate must set
+    `become_user` explicitly (to the configured uid-0 admin) instead of relying
+    on Ansible's default of `root`."""
+    for role in PRIVILEGED_ROLES:
+        files = sorted(
+            list((ROLES_DIR / role / "tasks").rglob("*.yml"))
+            + list((ROLES_DIR / role / "handlers").rglob("*.yml"))
+        )
+        assert files, f"{role}: no task/handler files"
+        for path in files:
+            for task in _iter_tasks(load(path)):
+                if "become" in task:
+                    assert "become_user" in task, (
+                        f"{path.relative_to(REPO)}: task {task.get('name')!r} "
+                        f"sets become without become_user"
+                    )
 
 
 def test_referenced_roles_exist(play):
@@ -194,6 +264,32 @@ def test_base_os_var_files_declare_packages():
     for path in files:
         data = load(path) or {}
         assert "bootstrap_base_packages" in data, f"{path.name} declares no packages"
+
+
+def test_base_var_lookup_selects_by_pkg_mgr():
+    """TOS 6 reports os_family=OtherLinux but pkg_mgr=apt, so the var lookup must
+    offer a pkg_mgr-family file; otherwise it falls back to default.yml, whose
+    `xz` package does not exist under apt."""
+    text = (ROLES_DIR / "bootstrap_base" / "tasks" / "variables.yml").read_text()
+    assert "{{ ansible_facts['pkg_mgr'] }}-family.yml" in text
+    apt = load(ROLES_DIR / "bootstrap_base" / "vars" / "apt-family.yml")
+    assert "xz-utils" in apt["bootstrap_base_packages"]
+
+
+OS_FAMILY_DEBIAN_GATE = re.compile(r"ansible_facts\['os_family'\]\s*[!=]=\s*'Debian'")
+
+
+def test_roles_gate_package_management_on_pkg_mgr_not_os_family():
+    """TOS 6 reports os_family=OtherLinux but pkg_mgr=apt, so every
+    package-management guard must key on pkg_mgr, not os_family=='Debian'."""
+    offenders = []
+    for path in sorted(ROLES_DIR.rglob("*.yml")):
+        for match in OS_FAMILY_DEBIAN_GATE.finditer(path.read_text()):
+            offenders.append(f"{path.relative_to(REPO)}: {match.group(0)}")
+    assert not offenders, (
+        "os_family=='Debian' package gates found (use pkg_mgr=='apt'): "
+        + ", ".join(offenders)
+    )
 
 
 def test_no_secrets_committed():

@@ -10,6 +10,11 @@
 - name: Bootstrap @terra (TerraMaster NAS / TOS 6)
   hosts: terra
   gather_facts: true
+  pre_tasks:
+    # Read-only guard; runs before backup_tos and survives --tags filtering.
+    - name: Preflight the TOS 6 privilege model
+      ansible.builtin.import_tasks: tasks/preflight_privilege_model.yml
+      tags: [always]
   roles:
     # The backup MUST run before anything on the device is changed.
     - role: backup_tos

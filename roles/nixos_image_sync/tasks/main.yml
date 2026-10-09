@@ -33,18 +33,20 @@
     - nixos_image_sync_rsync_check.rc != 0
     - not nixos_image_sync_install_rsync
 
+# Gate on pkg_mgr, not os_family: TOS 6 reports os_family=OtherLinux but is
+# apt-based, so an `os_family == 'Debian'` guard would skip the apt install.
 - name: Fail when rsync installation is requested but unsupported
   ansible.builtin.fail:
     msg: >-
-      Automatic rsync installation is only implemented for the Debian family;
-      {{ inventory_hostname }} reports "{{ ansible_facts['os_family'] }}".
+      Automatic rsync installation is only implemented for apt hosts;
+      {{ inventory_hostname }} reports pkg_mgr "{{ ansible_facts['pkg_mgr'] }}".
       Install rsync
       manually or set nixos_image_sync_require_rsync=false.
   when:
     - nixos_image_sync_require_rsync
     - nixos_image_sync_rsync_check.rc != 0
     - nixos_image_sync_install_rsync
-    - ansible_facts['os_family'] != 'Debian'
+    - ansible_facts['pkg_mgr'] != 'apt'
 
 - name: Install rsync when missing and permitted
   ansible.builtin.apt:
@@ -55,7 +57,7 @@
     - nixos_image_sync_require_rsync
     - nixos_image_sync_rsync_check.rc != 0
     - nixos_image_sync_install_rsync
-    - ansible_facts['os_family'] == 'Debian'
+    - ansible_facts['pkg_mgr'] == 'apt'
 
 - name: Ensure the staging directory exists on @terra
   ansible.builtin.file:

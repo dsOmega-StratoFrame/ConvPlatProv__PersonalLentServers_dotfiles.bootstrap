@@ -18,6 +18,11 @@
   gather_facts: true
   vars_files:
     - group_vars/nikolaigogol/vars.yml
+  pre_tasks:
+    # Read-only guard; fails fast if the TOS 6 privilege model regresses.
+    - name: Preflight the TOS 6 privilege model
+      ansible.builtin.import_tasks: tasks/preflight_privilege_model.yml
+      tags: [always]
   roles:
     - role: nixos_image_artifact
       tags: [image]

@@ -32,18 +32,30 @@ The playbook runs these roles in order:
    uploads its public key and verifies key-based login (idempotent). To reuse an
    already-deployed key instead, see
    [`docs/AccessSsh_ExistingKey.md`](./docs/AccessSsh_ExistingKey.md).
-3. **`access_sftp`** — installs `openssh-sftp-server` when the binary referenced
-   by TOS 6's `sshd_config` is missing, so Ansible uses the fast `sftp` transfer
-   instead of silently falling back to `piped`.
+3. **`access_sftp`** — on apt hosts, installs `openssh-sftp-server` when the
+   binary referenced by `sshd_config` is missing, so Ansible can use the fast
+   `sftp` transfer. On TOS 6 this is impossible: the platform protects and pins
+   its OpenSSH packages, the TerraMaster build does not ship
+   `/usr/lib/openssh/sftp-server`, and switching sshd to `internal-sftp`
+   segfaults. The host therefore opts out (`access_sftp_install: false`) and
+   selects Ansible's `piped` transfer method
+   (`ansible_ssh_transfer_method: piped`). See
+   [`docs/HomeServer__HomeAssistant_plan.md`](./docs/HomeServer__HomeAssistant_plan.md)
+   §11 for the SFTP-vs-`piped` comparison and decision.
 4. **`bootstrap_base`** — installs only the commands the Nix installer needs
    (`curl`, `xz`, …) if they are missing, and refuses to continue on xz versions
-   affected by CVE-2024-3094 (5.6.0 / 5.6.1).
+   affected by CVE-2024-3094 (5.6.0 / 5.6.1). Package selection keys on
+   `ansible_pkg_mgr == 'apt'`, not `os_family == 'Debian'` — TOS 6 reports
+   `OtherLinux` yet is apt-based, and its apt package name is `xz-utils`.
 5. **`bootstrap_nix`** — installs the Nix package manager (multi-user, systemd)
    via the pinned `danielrolls.nix` role and enables `nix-command` + `flakes`.
 6. **`bootstrap_docker`** — detects the Docker shipped with TOS 6 and only
-   installs Docker CE (Ubuntu `jammy` repo) when it is missing. This is a
-   host-side fallback for the NAS rootfs and is independent of the NixOS
-   system-container image, which is imported as a prebuilt tar.
+   installs Docker CE (Ubuntu `jammy` repo) when it is missing; the install gate
+   is `ansible_pkg_mgr == 'apt'`, not an `os_family == 'Debian'` check. The
+   `jammy` suite is the correct Docker CE repository for TOS 6's Ubuntu-22.04
+   compatibility. This is a host-side fallback for the NAS rootfs and is
+   independent of the NixOS system-container image, which is imported as a
+   prebuilt tar.
 
 ### Prerequisites on `@terra`
 
@@ -55,6 +67,15 @@ Before the first run, on the NAS:
   superuser, uid 0). TOS 6 keeps a separate `root` account that is **uid 9999 and
   unprivileged**, so the play runs with `ansible_become: false` and never
   sudo-escalates to `root` (doing so would *drop* privileges and break apt).
+  A read-only preflight (`tasks/preflight_privilege_model.yml`, imported from
+  `pre_tasks` with `tags: [always]`) asserts the connection is uid 0 and fails
+  fast with guidance if the model ever regresses.
+- **OS detection:** TOS 6 reports `ansible_distribution` / `ansible_os_family`
+  as `OtherLinux` (release/version `NA`) while `ansible_pkg_mgr` is `apt`.
+  Package decisions therefore key on `pkg_mgr`, never on `os_family == 'Debian'`
+  (or any `distribution*` fact), which would silently skip on TOS. See
+  [`docs/adr/0001-HomeServer__HomeAssistant.md`](./docs/adr/0001-HomeServer__HomeAssistant.md)
+  (Decision 8a). The Docker CE `jammy` repo selection is unaffected.
 - Security Isolation Mode is **off** — it disables SSH.
 
 ### Configure
@@ -70,8 +91,10 @@ Before the first run, on the NAS:
    [`docs/AccessSsh_ExistingKey.md`](./docs/AccessSsh_ExistingKey.md) for the
    checks and the variables to reuse it.
 
-2. Create the host vault and set the admin password (used for sudo, and for the
-   very first password-based connection on a device with no key yet):
+2. Create the host vault and set the admin password (retained for the very first
+   password-based connection on a device with no key yet, and for the rare
+   forced-`become` path; routine runs do not sudo-escalate because `terra` is
+   already uid 0 — see Prerequisites):
 
    ```sh
    make vault-edit-terra
@@ -79,10 +102,11 @@ Before the first run, on the NAS:
 
    Required variable:
 
-   - vault_terra_admin_password — the TOS admin password (also used for
-     sudo; required even when SSH is key-based). If the password contains a
-     double quote ("), escape it with a backslash (\") or wrap the value in
-     single quotes.
+   - vault_terra_admin_password — the TOS admin password (retained for keyless
+     first contact and for forced-become tasks; it is not used for routine
+     escalation, since `terra` is uid 0 and `ansible_become: false`). If the
+     password contains a double quote ("), escape it with a backslash (\") or
+     wrap the value in single quotes.
 
 Review the other knobs in [`group_vars/terra/vars.yml`](./group_vars/terra/vars.yml).
 Role defaults (declarations) live in each role's `defaults/main.yml`.
@@ -135,7 +159,7 @@ A pinned dev shell provides the test/lint tooling without depending on the host:
 
 ```sh
 nix develop .            # or `nix develop path:.` before flake.nix is committed
-make unit                # 57 unit tests
+make unit                # repository + role unit tests (tests/unit)
 make check               # syntax-check all four playbooks
 make lint                # ansible-lint
 ```
@@ -296,7 +320,7 @@ hosts.ini                       # local / terra / nikolaigogol / manilov
 group_vars/<host>/              # per-host values (+ encrypted vault)
 roles/backup_tos/               # snapshot TOS config before changes
 roles/access_ssh/               # key-based SSH access
-roles/access_sftp/              # restore the sshd SFTP server binary (TOS 6)
+roles/access_sftp/              # restore the sshd SFTP server binary (apt hosts; guarded off on TOS 6)
 roles/bootstrap_base/           # minimal base prerequisites
 roles/bootstrap_nix/            # Nix (multi-user)
 roles/bootstrap_docker/         # Docker detection / install

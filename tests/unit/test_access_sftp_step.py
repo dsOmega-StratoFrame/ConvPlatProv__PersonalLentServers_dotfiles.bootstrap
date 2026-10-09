@@ -1,11 +1,14 @@
 """Unit tests for the access_sftp step's pure logic.
 
 TOS 6's sshd_config points ``Subsystem sftp`` at
-``/usr/lib/openssh/sftp-server``, but the package providing that binary is not
-installed, so Ansible's sftp/scp transfer probes fail and it silently falls back
-to the slow ``piped`` transfer. This step installs the package after SSH access
-is established. The assertions below pin the package, the path, the apt-only
-guard and the playbook ordering.
+``/usr/lib/openssh/sftp-server``, but the TerraMaster build of the package does
+not ship that binary and the platform protects/pins its OpenSSH packages (and
+its sshd ``internal-sftp`` path segfaults), so native sftp cannot be restored.
+On apt hosts where the package *is* installable, this step installs it after SSH
+access is established; on TOS the host opts out (``access_sftp_install: false``)
+and Ansible uses ``ansible_ssh_transfer_method: piped``. The assertions below pin
+the package, the path, the opt-out guard, the apt-only gate and the playbook
+ordering.
 """
 from __future__ import annotations
 
@@ -50,6 +53,9 @@ def test_defaults_pin_package_and_path(defaults):
     assert defaults["access_sftp_package"] == "openssh-sftp-server"
     assert defaults["access_sftp_server_path"] == "/usr/lib/openssh/sftp-server"
     assert defaults["access_sftp_apt_lists_partial"] == "/var/lib/apt/lists/partial"
+    # Opt-out guard defaults to on; hosts that cannot install the package set it
+    # to false in group_vars.
+    assert defaults["access_sftp_install"] is True
 
 
 def test_recreates_apt_lists_partial_before_install():
@@ -77,6 +83,27 @@ def test_installs_package_only_when_binary_missing():
     assert apt["state"] == "present"
     assert "not access_sftp_server_stat.stat.exists" in task["when"]
     assert "ansible_facts['pkg_mgr'] == 'apt'" in task["when"]
+
+
+def test_install_is_opt_out_gated():
+    # The role must be skippable per host: TOS 6 cannot install the package, so
+    # every apt-touching task carries the `access_sftp_install` gate.
+    tasks = yaml.safe_load(TASKS_PATH.read_text())
+    guard = "access_sftp_install | bool"
+    for name in (
+        "Ensure the apt lists directory exists",
+        "Install the SSH SFTP server package",
+        "Verify the SSH SFTP server binary is present",
+    ):
+        assert guard in _find_task(tasks, name)["when"], f"{name}: missing guard"
+
+
+def test_terra_opts_out_and_selects_piped():
+    # TOS 6 protects/pins its OpenSSH packages and its sshd cannot serve sftp,
+    # so @terra disables access_sftp and forces the piped transfer method.
+    terra = yaml.safe_load((REPO / "group_vars" / "terra" / "vars.yml").read_text())
+    assert terra["access_sftp_install"] is False
+    assert terra["ansible_ssh_transfer_method"] == "piped"
 
 
 def test_role_uses_ansible_facts_not_top_level_fact_vars():

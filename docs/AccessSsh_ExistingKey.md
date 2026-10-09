@@ -25,9 +25,14 @@ One variable, `deploy_ssh_private_key_file`, drives both sides:
 `access_ssh_password` disables the password-based `authorized_key` upload. The
 role then only **verifies** that key login works.
 
-`vault_terra_admin_password` is still required: it feeds
-`ansible_become_password` (sudo), which is a separate authentication plane from
-SSH. A key replaces the SSH password, never the sudo password.
+`vault_terra_admin_password` is **retained but not needed for routine
+escalation**: on TOS 6 `terra` is already uid 0 and the play runs with
+`ansible_become: false` / `ansible_become_user: "terra"` (see
+[`HomeServer__HomeAssistant_plan.md`](./HomeServer__HomeAssistant_plan.md) §3, assumption 4
+and [`adr/0001-HomeServer__HomeAssistant.md`](./adr/0001-HomeServer__HomeAssistant.md) §8).
+It feeds `ansible_become_password` for the keyless first-contact flow and for a
+forced-`become` task, not for ordinary sudo. A key replaces the SSH password,
+never the vault entry.
 
 ## Prerequisites
 
@@ -50,8 +55,9 @@ SSH. A key replaces the SSH password, never the sudo password.
 5. **`sshpass` only if you keep a transport password.** Key-only transport does
    not need it. It is required if `ansible_password` is set, because Ansible
    wraps the `ssh` invocation with `sshpass`.
-6. **Vault password set** (`vault_terra_admin_password`) if `become` is enabled —
-   i.e. for sudo.
+6. **Vault password set** (`vault_terra_admin_password`) only if you use the
+   keyless password path or a forced-`become` task. Routine runs need no sudo:
+   `terra` is uid 0 and `ansible_become: false`.
 
 ## Checks (bash)
 
@@ -99,7 +105,8 @@ In `group_vars/terra/vars.yml`:
 deploy_ssh_private_key_file: "~/.ssh/<your-existing-key>"
 access_ssh_generate_key: false
 
-# Key-only SSH transport; the password is kept for sudo only.
+# Key-only SSH transport; the vault password is retained only for a forced
+# become task (TOS 6 needs no routine sudo; see plan §3, assumption 4).
 # Remove/blank ansible_password (if present) and set:
 access_ssh_password: ""
 ```
@@ -108,8 +115,9 @@ The connection host is taken from the inventory, so `ansible_host` is **not**
 set. Add `ansible_host: "<name>"` only if the inventory name (`terra-local`) does
 not resolve from the control node.
 
-**Keep** `ansible_become_password: "{{ vault_terra_admin_password | default(omit) }}"`
-and the `vault_terra_admin_password` entry in `group_vars/terra/vault`.
+`ansible_become_password: "{{ vault_terra_admin_password | default(omit) }}"`
+and the `vault_terra_admin_password` entry in `group_vars/terra/vault` are
+retained defensively, but are not used for routine runs (`ansible_become: false`).
 
 ## Run and verify
 
@@ -140,4 +148,5 @@ a re-run reports no changes — that is the idempotency guarantee.
   git-ignored; keep it that way.
 - A `.pub` is not secret, but it should not be committed either.
 - Prefer key-only transport (no `ansible_password`) and keep the admin password
-  in the vault for sudo.
+  in the vault for the keyless first-contact and forced-`become` paths; routine
+  runs need no sudo.

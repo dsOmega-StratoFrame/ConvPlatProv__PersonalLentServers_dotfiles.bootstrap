@@ -14,6 +14,19 @@
       transfer fallback.
   when: ansible_facts['pkg_mgr'] != 'apt'
 
+# TOS 6 cannot restore the binary: its OpenSSH packages are protected and
+# apt-pinned, the TerraMaster build does not ship /usr/lib/openssh/sftp-server,
+# and the sshd `internal-sftp` path segfaults. group_vars/terra/vars.yml sets
+# access_sftp_install: false and selects the `piped` transfer method; the role
+# then stops before touching apt. See docs/HomeServer__HomeAssistant_plan.md §11.
+- name: Report the disabled SFTP restore
+  ansible.builtin.debug:
+    msg: >-
+      access_sftp is disabled for {{ inventory_hostname }}: this host protects
+      its OpenSSH packages and its sshd cannot serve sftp, so Ansible uses the
+      piped transfer method instead.
+  when: not access_sftp_install | bool
+
 # TOS 6 ships without /var/lib/apt/lists/partial, so apt's cache update aborts
 # with "List directory /var/lib/apt/lists/partial is missing" before it can
 # reach the package. Recreate the directory first (file creates parents).
@@ -25,6 +38,7 @@
     group: root
     mode: "0755"
   when:
+    - access_sftp_install | bool
     - ansible_facts['pkg_mgr'] == 'apt'
     - not access_sftp_server_stat.stat.exists
 
@@ -39,14 +53,17 @@
     install_recommends: false
     update_cache: true
   when:
+    - access_sftp_install | bool
     - ansible_facts['pkg_mgr'] == 'apt'
     - not access_sftp_server_stat.stat.exists
-  register: access_sftp_install
+  register: access_sftp_package_install
 
 - name: Verify the SSH SFTP server binary is present
   ansible.builtin.stat:
     path: "{{ access_sftp_server_path }}"
   register: access_sftp_server_verify
-  failed_when:
+  when:
+    - access_sftp_install | bool
     - ansible_facts['pkg_mgr'] == 'apt'
+  failed_when:
     - not access_sftp_server_verify.stat.exists

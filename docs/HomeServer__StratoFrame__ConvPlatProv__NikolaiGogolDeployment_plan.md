@@ -22,7 +22,7 @@
 
 ## 2. Architecture summary
 
-Layer 1 gets its own playbook, per ADR 0001 §"one playbook per layer": **`deploy-nikolaigogol.yml`** targets `terra` (the artifact is *built on the control node* via `delegate_to: localhost`, then rsynced in). Four small roles, one feature each, namespaced vars, tags `image` / `container`:
+Layer 1 gets its own playbook, per ADR 0001 §"one playbook per layer": **`deploy-nikolaigogol.yml`** targets `terra` (the artifact is *built on the control node* via `delegate_to: localhost`, then rsynced in). Four small roles, one feature each, namespaced vars, tags `image` / `container`. The play imports the read-only privilege preflight (`tasks/preflight_privilege_model.yml`, `tags: [always]`): on TOS 6 the SSH account `terra` is uid 0 while `root` is uid 9999, so any forced `become` must target `ansible_become_user` (ADR 0001 §8):
 
 ```
 control node (localhost)          @terra (TOS 6, docker daemon)
@@ -74,7 +74,7 @@ No new runtime deps on `@terra` beyond Docker (already bootstrapped). `bootstrap
 
 ### Step 5 — Role `nixos_image_load` (import)
 - **Files:** `roles/nixos_image_load/{defaults,tasks}/main.yml`.
-- Behaviour: gate on `docker image inspect <name>:<sha12>`; if absent run `ansible.builtin.command: docker import <tar> <name>:<sha12>` with `become: true` and explicit `changed_when`. Rootfs import intentionally omits ENTRYPOINT/STOPSIGNAL — the compose template supplies `command: /init` + `stop_signal: SIGRTMIN+3` (matches `@NikolaiGogol` today).
+- Behaviour: gate on `docker image inspect <name>:<sha12>`; if absent run `ansible.builtin.command: docker import <tar> <name>:<sha12>` with `become: true` and explicit `changed_when`. TOS 6 privilege model (ADR 0001 §8): `become_user: "{{ ansible_become_user | default('root') }}"` targets the configured uid-0 admin account, never TOS's unprivileged `root` (uid 9999) — defaulting to `root` drops privileges. Rootfs import intentionally omits ENTRYPOINT/STOPSIGNAL — the compose template supplies `command: /init` + `stop_signal: SIGRTMIN+3` (matches `@NikolaiGogol` today).
 - **Tests:** unit (no pure logic → skip); E2E only for the actual import; integration covers the *wiring* via a no-op dry check if the mock daemon is up (documented as best-effort).
 - **Acceptance:** E2E `docker image inspect ds-omega/nikolai-gogol:<sha12>` returns; re-run reports no change.
 

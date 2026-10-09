@@ -14,13 +14,37 @@
 # from the control node.
 ansible_user: "terra"
 ansible_connection: ssh
-ansible_become: true
+# TOS 6 privilege model (confirmed on the device via gather_facts): the first
+# account (`terra`) is uid 0 and root-equivalent, while the separate `root`
+# account is uid 9999 and *unprivileged*. Ansible's default `become_user: root`
+# therefore runs `sudo -u root` and DROPS privileges: apt cannot create
+# /var/lib/apt/lists and tar cannot read root-only paths. The SSH user already
+# has uid 0, so no escalation is needed.
+# See docs/HomeServer__HomeAssistant_plan.md §3 (assumption 4).
+ansible_become: false
+# Defensive: roles that force `become: true` (e.g. the vendored danielrolls.nix)
+# must escalate to the uid-0 account, never to TOS's unprivileged `root`.
+ansible_become_user: "terra"
 ansible_become_method: sudo
-# sudo still needs the TOS admin password even when SSH is key-based.
+# Escalating to the uid-0 account normally needs no password; keep the vault
+# value so a password prompt still succeeds.
 ansible_become_password: "{{ vault_terra_admin_password | default(omit) }}"
 # SSH transport authenticates with the key below (or ssh-agent) — no password.
 # See docs/AccessSsh_ExistingKey.md.
 ansible_ssh_private_key_file: "{{ deploy_ssh_private_key_file }}"
+
+# File transfer. TOS 6 protects and pins its OpenSSH packages:
+# openssh-sftp-server is listed in /etc/disallowed_packages.conf and pinned in
+# /etc/apt/preferences.d/lock_system_packages.pref (Pin-Priority -1), its
+# sshd_config points `Subsystem sftp` at a /usr/lib/openssh/sftp-server binary
+# the TerraMaster build does not ship, and switching the daemon to `internal-sftp`
+# makes it segfault. Native sftp cannot be restored on this host, so force
+# Ansible's `piped` transfer method and switch the access_sftp role off here
+# (the role stays available for apt hosts where the package is installable).
+# See docs/HomeServer__HomeAssistant_plan.md §11.
+ansible_ssh_transfer_method: piped
+access_sftp_install: false
+
 # First contact on a device with no key yet: uncomment this and install sshpass
 # on the control node (it also enables the access_ssh password upload path).
 # ansible_password: "{{ vault_terra_admin_password | default(omit) }}"

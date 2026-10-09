@@ -10,7 +10,10 @@
   ansible.builtin.set_fact:
     bootstrap_base_missing_commands: "{{ bootstrap_base_command_checks.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}"
 
-- name: Install base packages (Debian family)
+# Gate on pkg_mgr, not os_family: TOS 6 is Ubuntu-based but reports
+# os_family=OtherLinux, so an `os_family == 'Debian'` guard would skip apt and
+# leave the prerequisites missing.
+- name: Install base packages (apt)
   ansible.builtin.apt:
     name: "{{ bootstrap_base_packages }}"
     state: present
@@ -18,7 +21,7 @@
   when:
     - bootstrap_base_manage_packages
     - bootstrap_base_missing_commands | length > 0
-    - ansible_facts['os_family'] == 'Debian'
+    - ansible_facts['pkg_mgr'] == 'apt'
 
 - name: Install base packages (generic)
   ansible.builtin.package:
@@ -27,19 +30,36 @@
   when:
     - bootstrap_base_manage_packages
     - bootstrap_base_missing_commands | length > 0
-    - ansible_facts['os_family'] != 'Debian'
+    - ansible_facts['pkg_mgr'] != 'apt'
 
-- name: Fail when prerequisites are missing on an unsupported OS family
-  ansible.builtin.fail:
-    msg: >-
-      Missing required commands {{ bootstrap_base_missing_commands | join(', ') }}
-      on {{ inventory_hostname }} and the OS family
-      "{{ ansible_facts['os_family'] }}" is not handled automatically. Install them
-      manually or disable bootstrap_base_manage_packages.
+# Re-detect after the install attempt so the failure below reflects reality
+# rather than the pre-install snapshot.
+- name: Re-detect required commands after the install attempt
+  ansible.builtin.command: "command -v {{ item }}"
+  loop: "{{ bootstrap_base_required_commands }}"
+  register: bootstrap_base_command_rechecks
+  changed_when: false
+  failed_when: false
   when:
     - bootstrap_base_manage_packages
     - bootstrap_base_missing_commands | length > 0
-    - ansible_facts['os_family'] != 'Debian'
+
+- name: Record commands still missing after the install attempt
+  ansible.builtin.set_fact:
+    bootstrap_base_still_missing_commands: >-
+      {{ (bootstrap_base_command_rechecks.results | default([]))
+         | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}
+
+- name: Fail when prerequisites are still missing
+  ansible.builtin.fail:
+    msg: >-
+      Missing required commands {{ bootstrap_base_still_missing_commands | join(', ') }}
+      on {{ inventory_hostname }} (pkg_mgr "{{ ansible_facts['pkg_mgr'] }}") could not
+      be installed automatically. Install them manually or disable
+      bootstrap_base_manage_packages.
+  when:
+    - bootstrap_base_manage_packages
+    - bootstrap_base_still_missing_commands | length > 0
 
 - name: Detect the installed xz version
   ansible.builtin.command: "xz --version"

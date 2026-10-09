@@ -39,11 +39,49 @@ debugging.
 ## 3. Assumptions
 
 1. TOS 6 SSH is enabled manually and uses the superuser account `terra`.
-2. Ansible's reported `ansible_distribution` on TOS 6 is not yet confirmed; the
-   `bootstrap_base` var lookup falls back to `default.yml`.
+2. **TOS 6 OS detection — confirmed on the live device (revision `f1d3d1a` +
+   build fix).** A verbose `gather_facts` run
+   (`logs/20261006T212942-access_ssh.log`) reports `ansible_distribution:
+   OtherLinux`, `ansible_distribution_release: NA`,
+   `ansible_distribution_version: NA`, `ansible_distribution_major_version: NA`,
+   `ansible_os_family: OtherLinux`, and `ansible_pkg_mgr: apt`. TOS 6 is
+   Ubuntu-22.04-compatible but does **not** identify as Debian/Ubuntu. The
+   `bootstrap_base` var lookup therefore selects `vars/apt-family.yml` through
+   the `pkg_mgr`-keyed candidate
+   (`{{ ansible_facts['pkg_mgr'] }}-family.yml`), ahead of the `os_family`
+   candidate; `default.yml` remains the last-resort fallback.
 3. The NAS admin password is new and stored only in `group_vars/terra/vault`.
-4. `become`/`sudo` is available on TOS 6; if the superuser account does not need
-   it, `ansible_become` can be set to `false` in `group_vars/terra/vars.yml`.
+4. **TOS 6 privilege model — confirmed on the live device (revision
+   `f1d3d1a` + build fix).** The first/admin account `terra` (the SSH user,
+   `ansible_user: terra`) is **uid 0 and root-equivalent**; the separate `root`
+   account is **uid 9999 and unprivileged** (empty capability set). Ansible's
+   default `become_user: root` therefore runs `sudo -u root` and *drops*
+   privileges (uid 0 → 9999), breaking apt (cannot create
+   `/var/lib/apt/lists/partial`) and tar (root-only `/var/spool/cron/crontabs`
+   unreadable). Therefore `ansible_become` **MUST** be `false`, or any forced
+   escalation (`ansible_become_user`) **MUST** target the uid-0 account — never
+   `root`. `group_vars/terra/vars.yml` pins `ansible_become: false` and
+   `ansible_become_user: "terra"`. **Enforcement:** the read-only preflight
+   `tasks/preflight_privilege_model.yml` (asserts
+   `ansible_facts['user_uid'] == 0`) is imported from `pre_tasks` with
+   `tags: [always]` in `HomeServer__HomeAssistant.yml` and
+   `deploy-nikolaigogol.yml`; privileged Layer-1 roles additionally set
+   `become_user: "{{ ansible_become_user | default('root') }}"` explicitly.
+   Evidence: `logs/20261006T212942-access_ssh.log` (`ansible_user_uid=9999`,
+   `SUDO_UID=0`, `SUDO_USER=terra`); corroborated by TerraMaster community
+   documentation.
+5. **Package-management convention — confirmed on the live device.**
+   Package-management decisions **must** key on
+   `ansible_facts['pkg_mgr'] == 'apt'` (`!=` for the non-apt path), never on
+   `os_family == 'Debian'` or a `distribution*` fact: TOS 6 reports
+   `os_family: OtherLinux` while apt is present, so a Debian/`os_family` gate
+   silently skips and leaves prerequisites missing. This is the same class of
+   issue as the privilege-model fact in assumption 4. It is applied in
+   `bootstrap_base` (`dependencies.yml` + the `variables.yml` lookup),
+   `access_sftp`, `nixos_image_sync`, and `bootstrap_docker`, and guarded
+   repo-wide by `test_roles_gate_package_management_on_pkg_mgr_not_os_family`.
+   Docker CE's `jammy` apt-suite selection is unaffected — that is a repository
+   choice, not an OS-detection gate.
 
 ## 4. Phases
 
@@ -178,8 +216,13 @@ Four layers, cheapest first:
 
 ## 9. Unresolved / to confirm on first live run
 
-1. `ansible_distribution` / `os_family` reported by TOS 6.
-2. Whether `become`/`sudo` is required for the `terra` account.
+1. ~~`ansible_distribution` / `os_family` reported by TOS 6.~~ **Resolved (see §3,
+   assumption 2): `ansible_distribution`/`ansible_os_family` = `OtherLinux`
+   (release/version `NA`), `ansible_pkg_mgr` = `apt`. Package gates key on
+   `pkg_mgr`, never on `os_family == 'Debian'` (assumption 5).**
+2. ~~Whether `become`/`sudo` is required for the `terra` account.~~ **Resolved
+   (see §3, assumption 4): no escalation is needed — `terra` is already uid 0 — and
+   `become_user: root` would drop privileges to uid 9999.**
 3. Whether Docker is pre-installed and on which path.
 4. Whether Nix sandboxing works on the TOS 6 kernel.
 5. `@terra` reachability: the connection host comes from the inventory
@@ -210,3 +253,49 @@ When adding a role/step:
 3. Add its tag to `tests/integration/playbook.yml`.
 4. Create `Makefile.<Step>` (`STEP_TAGS := <tag>` + `include Makefile.Steps`).
 5. Record the row in the matrix above.
+
+## 11. `@terra` file transfer — SFTP vs `piped` (decision)
+
+TOS 6's `/etc/ssh/sshd_config` declares
+`Subsystem sftp /usr/lib/openssh/sftp-server`, but native sftp cannot be
+restored on the device:
+
+- The TerraMaster build of the `openssh-sftp-server` package ships
+  `/usr/sbin/sftpd` (a second sshd daemon), **not**
+  `/usr/lib/openssh/sftp-server`; `dpkg -S /usr/lib/openssh/sftp-server` finds
+  nothing.
+- The platform protects the package: `openssh-client`, `openssh-server` and
+  `openssh-sftp-server` are listed in `/etc/disallowed_packages.conf`, and the
+  `apt`/`apt-get` shell wrappers (`/etc/tos/scripts/apt*`, aliased in
+  `/root/.bashrc`) refuse to install them. Independently,
+  `/etc/apt/preferences.d/lock_system_packages.pref` pins the same packages with
+  `Pin-Priority: -1`, so apt has no candidate to upgrade to.
+- Pointing the main sshd at `internal-sftp` (the value TOS's own
+  `/etc/ssh/sftpd_config` uses) makes the daemon **segfault** on the first SFTP
+  operation (`dmesg`: `sshd[...]: segfault ... in libc.so.6`).
+
+Ansible's `sftp`/`scp` transfer methods reuse the control connection's SSH
+channel, so a transfer method cannot be aimed at a different daemon or port; the
+only ways to get native sftp would be to move the whole connection to TOS's
+`sftpd` (port 9333) or to drop a stock `sftp-server` binary into the referenced
+path.
+
+Comparison for this repository's workloads:
+
+| Criterion | `piped` | TOS sftpd (port 9333) | Stock `sftp-server` binary |
+|---|---|---|---|
+| Works today | ✅ known-good fallback | ❓ unverified; likely the same segfault | ❓ plausible, but mixes an 8.9p1 binary with TOS's 8.8p1 sshd |
+| System change | none | enable + persist a non-default TOS service; move Ansible to 9333 | drop one file at `/usr/lib/openssh/sftp-server` |
+| Ansible integration | one variable | `ansible_port: 9333` + sftpd must support full exec/PAM auth | transparent (the path is already referenced) |
+| Performance | negligible here — module transfers are small; large artifacts use `synchronize`/rsync | good if it works | good if it works |
+| TOS compatibility | respects TOS | fights TOS (enables a protected service) | survives until a TOS update overwrites the file |
+| Testability | unit + E2E | hard to mock a port-9333 daemon | unit + E2E |
+| Rollback | revert the variable | stop the service, revert the port | delete the file |
+
+**Decision: use `piped`.** `group_vars/terra/vars.yml` sets
+`ansible_ssh_transfer_method: piped`, and the `access_sftp` role is retained but
+guarded off on TOS (`access_sftp_install: false`) so it still documents the
+intent and remains available for apt hosts where the binary really is
+installable. Native sftp would be revisited only if a real `copy`/`fetch`
+throughput need appears; if so, prefer dropping in the stock binary (T3) over
+reconfiguring TOS's sshd (T1).

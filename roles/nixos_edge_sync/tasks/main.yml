@@ -26,3 +26,5 @@
   when: nixos_edge_sync_enabled | bool
   changed_when: true
   become: "{{ nixos_edge_sync_become }}"
+  # TOS 6: `root` is uid 9999 (unprivileged); target the configured become user.
+  become_user: "{{ ansible_become_user | default('root') }}"

@@ -1,0 +1,26 @@
+---
+# Shared preflight: verify the TOS 6 privilege model before any role mutates the
+# device.
+#
+# On TOS 6 the first/admin account (`terra`) is uid 0 and root-equivalent, while
+# the separate `root` account is uid 9999 and *unprivileged*. Ansible's default
+# `become_user: root` therefore runs `sudo -u root` and DROPS privileges, which
+# breaks apt (cannot create /var/lib/apt/lists) and tar (cannot read root-only
+# paths). group_vars/terra/vars.yml pins `ansible_become: false` and
+# `ansible_become_user: "terra"`; this read-only assert fails fast with guidance
+# if either regresses. It changes nothing on the device.
+#
+# Imported from `pre_tasks` with the `always` tag so it still runs under
+# `make run TAGS=...`.
+- name: Assert the connection is root-equivalent (TOS 6 privilege model)
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['user_uid'] | int == 0
+    fail_msg: >-
+      Effective uid is {{ ansible_facts['user_uid'] }} (user
+      {{ ansible_facts['user_id'] }}), not 0. On TOS 6 the admin account
+      ({{ ansible_user }}) is uid 0, while the `root` account is uid 9999 and
+      unprivileged; `become: true` with become_user=root would drop privileges
+      and break apt/tar. Keep `ansible_become: false` and
+      `ansible_become_user: "{{ ansible_user }}"` in group_vars/terra/vars.yml.
+    success_msg: "Running as {{ ansible_facts['user_id'] }} (uid 0, root-equivalent)."

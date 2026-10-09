@@ -13,6 +13,8 @@ nixos_image_load_remote_archive: "{{ nixos_image_sync_remote_archive | default('
 # Set false where no Docker daemon is available (e.g. the integration mock) to
 # exercise the wiring without importing.
 nixos_image_load_manage: true
-# `docker import` needs root (or docker-group membership) on TOS.
+# `docker import` needs root (or docker-group membership) on TOS. Escalate to
+# the configured become user (the uid-0 admin account), never TOS's
+# unprivileged `root` (uid 9999). See nixos_container defaults.
 nixos_image_load_become: true
 nixos_image_load_force: false
