@@ -79,6 +79,10 @@ Common targets (defined in `Makefile.Steps`):
 - `shell-ssh` — interactive SSH to the real target (human)
 - `logs` — follow mock container logs (mixed)
 - `clean` — remove local test artifacts (agent)
+- `run-log` — run an ad-hoc command with logging (agent)
+
+Every ansible-running target logs to `logs/<timestamp>-<tag>.log` (and
+`logs/latest.log`); `logs/` is git-ignored.
 
 Select the target with `INVENTORY=hosts.ini` (E2E, default) or
 `INVENTORY=tests/integration/inventory.ini` (integration).

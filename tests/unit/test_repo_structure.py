@@ -27,6 +27,7 @@ VERIFY_PLAYBOOK = REPO / "verify-terra.yml"
 VERIFY_NIKOLAIGOGOL_PLAYBOOK = REPO / "verify-nikolaigogol.yml"
 REQUIREMENTS = REPO / "requirements.yml"
 ROLES_DIR = REPO / "roles"
+TERRA_VARS = REPO / "group_vars" / "terra" / "vars.yml"
 
 
 def load(path: Path):
@@ -86,6 +87,17 @@ def test_playbook_targets_terra(play):
 
 def test_backup_runs_first(play):
     assert role_names(play)[0] == "backup_tos"
+
+
+def test_terra_does_not_escalate_to_unprivileged_root():
+    """TOS 6's `root` account is uid 9999 (unprivileged) while `terra` is uid 0,
+    so Ansible's default `become_user: root` would drop privileges (apt cannot
+    create /var/lib/apt/lists; tar cannot read root-only paths). The SSH user is
+    already root-equivalent, so become is off and any role that forces it must
+    target `terra`, not `root`."""
+    data = load(TERRA_VARS)
+    assert data["ansible_become"] is False
+    assert data["ansible_become_user"] == "terra"
 
 
 def test_referenced_roles_exist(play):
@@ -194,3 +206,23 @@ def test_no_secrets_committed():
         if path.suffix in {".pem", ".key"}:
             suspicious.append(path)
     assert not suspicious, f"possible key material committed: {suspicious}"
+
+
+TOP_LEVEL_FACT_RE = re.compile(
+    r"\bansible_(os_family|distribution|distribution_major_version|"
+    r"distribution_release|pkg_mgr|date_time|architecture|system|hostname|"
+    r"fqdn|kernel|default_ipv4)\b"
+)
+
+
+def test_roles_use_ansible_facts_not_top_level_fact_vars():
+    """INJECT_FACTS_AS_VARS is deprecated (removal announced for ansible-core
+    2.24): roles must reference ansible_facts[...] / ansible_facts.* instead of
+    top-level ansible_* fact vars."""
+    offenders = []
+    for path in sorted(ROLES_DIR.rglob("*.yml")):
+        for match in TOP_LEVEL_FACT_RE.finditer(path.read_text()):
+            offenders.append(f"{path.relative_to(REPO)}: {match.group(0)}")
+    assert not offenders, (
+        "top-level fact vars found (use ansible_facts[...]): " + ", ".join(offenders)
+    )

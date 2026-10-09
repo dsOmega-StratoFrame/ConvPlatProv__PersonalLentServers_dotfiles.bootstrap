@@ -11,7 +11,7 @@
 # See ADR-TOS-BACKUP-001 R2 for the binding architecture.
 backup_tos_local_dir: "{{ playbook_dir }}/backups"
 backup_tos_remote_dir: "/var/tmp"
-backup_tos_timestamp: "{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date +%Y%m%dT%H%M%S')) }}"
+backup_tos_timestamp: "{{ ansible_facts.date_time.iso8601_basic_short | default(lookup('pipe', 'date +%Y%m%dT%H%M%S')) }}"
 backup_tos_staging_dir: "{{ backup_tos_remote_dir }}/backup_tos-{{ inventory_hostname }}-{{ backup_tos_timestamp }}"
 backup_tos_scope: "/etc"
 

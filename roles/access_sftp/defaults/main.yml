@@ -1,0 +1,13 @@
+---
+# TOS 6's sshd_config declares
+#   Subsystem sftp /usr/lib/openssh/sftp-server
+# but the package that provides that binary is not installed, so Ansible's
+# sftp (and, on OpenSSH >= 9.0 control nodes, its scp fallback) fail and it
+# silently falls back to the slower `piped` transfer. Installing the package
+# restores the fast sftp path without touching sshd_config.
+access_sftp_package: openssh-sftp-server
+access_sftp_server_path: /usr/lib/openssh/sftp-server
+# TOS 6 ships without this directory, which makes `apt-get update` (and the apt
+# module's update_cache) abort with "List directory .../partial is missing".
+# Recreate it before any apt call; a harmless no-op on healthy hosts.
+access_sftp_apt_lists_partial: /var/lib/apt/lists/partial

@@ -1,4 +1,4 @@
-# Manual testing for the SSH access step (role: access_ssh).
+# Manual testing for the SSH access step (roles: access_ssh, access_sftp).
 # See Makefile.Steps for the target list and INVENTORY selection.
 STEP_TAGS := access
 include Makefile.Steps

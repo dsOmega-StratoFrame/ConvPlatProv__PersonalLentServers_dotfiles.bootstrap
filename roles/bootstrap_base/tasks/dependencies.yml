@@ -18,7 +18,7 @@
   when:
     - bootstrap_base_manage_packages
     - bootstrap_base_missing_commands | length > 0
-    - ansible_os_family == 'Debian'
+    - ansible_facts['os_family'] == 'Debian'
 
 - name: Install base packages (generic)
   ansible.builtin.package:
@@ -27,19 +27,19 @@
   when:
     - bootstrap_base_manage_packages
     - bootstrap_base_missing_commands | length > 0
-    - ansible_os_family != 'Debian'
+    - ansible_facts['os_family'] != 'Debian'
 
 - name: Fail when prerequisites are missing on an unsupported OS family
   ansible.builtin.fail:
     msg: >-
       Missing required commands {{ bootstrap_base_missing_commands | join(', ') }}
       on {{ inventory_hostname }} and the OS family
-      '{{ ansible_os_family }}' is not handled automatically. Install them
+      "{{ ansible_facts['os_family'] }}" is not handled automatically. Install them
       manually or disable bootstrap_base_manage_packages.
   when:
     - bootstrap_base_manage_packages
     - bootstrap_base_missing_commands | length > 0
-    - ansible_os_family != 'Debian'
+    - ansible_facts['os_family'] != 'Debian'
 
 - name: Detect the installed xz version
   ansible.builtin.command: "xz --version"

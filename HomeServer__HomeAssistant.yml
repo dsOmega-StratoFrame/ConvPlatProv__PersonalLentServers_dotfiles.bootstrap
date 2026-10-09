@@ -16,6 +16,10 @@
       tags: [backup]
     - role: access_ssh
       tags: [access, ssh]
+    # Restore the SFTP server binary that TOS 6's sshd_config references but
+    # does not ship, so Ansible stops falling back to `piped` transfer.
+    - role: access_sftp
+      tags: [access, ssh]
     - role: bootstrap_base
       tags: [base, prereqs]
     - role: bootstrap_nix

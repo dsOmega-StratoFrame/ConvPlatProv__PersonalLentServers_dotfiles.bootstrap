@@ -156,3 +156,4 @@ dmypy.json
 backups/
 tests/artifacts/
 tests/integration/.ssh/
+logs/

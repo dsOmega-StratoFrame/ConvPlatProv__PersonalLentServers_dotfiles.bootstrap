@@ -32,12 +32,15 @@ The playbook runs these roles in order:
    uploads its public key and verifies key-based login (idempotent). To reuse an
    already-deployed key instead, see
    [`docs/AccessSsh_ExistingKey.md`](./docs/AccessSsh_ExistingKey.md).
-3. **`bootstrap_base`** — installs only the commands the Nix installer needs
+3. **`access_sftp`** — installs `openssh-sftp-server` when the binary referenced
+   by TOS 6's `sshd_config` is missing, so Ansible uses the fast `sftp` transfer
+   instead of silently falling back to `piped`.
+4. **`bootstrap_base`** — installs only the commands the Nix installer needs
    (`curl`, `xz`, …) if they are missing, and refuses to continue on xz versions
    affected by CVE-2024-3094 (5.6.0 / 5.6.1).
-4. **`bootstrap_nix`** — installs the Nix package manager (multi-user, systemd)
+5. **`bootstrap_nix`** — installs the Nix package manager (multi-user, systemd)
    via the pinned `danielrolls.nix` role and enables `nix-command` + `flakes`.
-5. **`bootstrap_docker`** — detects the Docker shipped with TOS 6 and only
+6. **`bootstrap_docker`** — detects the Docker shipped with TOS 6 and only
    installs Docker CE (Ubuntu `jammy` repo) when it is missing. This is a
    host-side fallback for the NAS rootfs and is independent of the NixOS
    system-container image, which is imported as a prebuilt tar.
@@ -49,7 +52,9 @@ Before the first run, on the NAS:
 - A storage pool and volumes are configured (already the case).
 - **SSH is enabled**: Control Panel → Network Services → Terminal & SNMP.
 - An admin account exists (here named `terra`; TOS 6 makes the first account a
-  superuser).
+  superuser, uid 0). TOS 6 keeps a separate `root` account that is **uid 9999 and
+  unprivileged**, so the play runs with `ansible_become: false` and never
+  sudo-escalates to `root` (doing so would *drop* privileges and break apt).
 - Security Isolation Mode is **off** — it disables SSH.
 
 ### Configure
@@ -99,6 +104,18 @@ make run TAGS=backup
 
 `bin/dot-bootstrap` is the wrapper behind `make run`: it takes a playbook and a
 tag selector, and offers to install Ansible if it is missing.
+
+#### Run logs
+
+Every ansible-running `make` target is logged through `bin/run-log`: combined
+output goes to `logs/<timestamp>-<tag>.log`, with `logs/latest.log` pointing at
+the newest run (`logs/` is git-ignored). Terminal highlighting is preserved
+(`ANSIBLE_FORCE_COLOR`, overridable with `ANSIBLE_FORCE_COLOR=0`); the stored log
+is stripped of ANSI codes. Log an ad-hoc command with:
+
+```sh
+make run-log CMD='ansible-playbook ...'
+```
 
 ### Verify and test
 
@@ -279,6 +296,7 @@ hosts.ini                       # local / terra / nikolaigogol / manilov
 group_vars/<host>/              # per-host values (+ encrypted vault)
 roles/backup_tos/               # snapshot TOS config before changes
 roles/access_ssh/               # key-based SSH access
+roles/access_sftp/              # restore the sshd SFTP server binary (TOS 6)
 roles/bootstrap_base/           # minimal base prerequisites
 roles/bootstrap_nix/            # Nix (multi-user)
 roles/bootstrap_docker/         # Docker detection / install

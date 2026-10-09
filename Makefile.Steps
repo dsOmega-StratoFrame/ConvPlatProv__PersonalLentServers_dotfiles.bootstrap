@@ -11,6 +11,7 @@
 #   tests/integration/inventory.ini -> mock container (integration)
 #
 # Targets are marked human (interactive), agent (non-interactive) or mixed.
+# Every ansible-running target is logged through bin/run-log (see Makefile.Log).
 
 STEP_TAGS ?=
 PLAYBOOK ?= HomeServer__HomeAssistant.yml
@@ -22,13 +23,15 @@ COMPOSE ?= tests/integration/docker-compose.yml
 SSH_TARGET ?= terra
 EXTRA_ARGS ?=
 
+include Makefile.Log
+
 .PHONY: help run dry verify up down shell shell-ssh logs clean
 
 help:
 	@echo "Step: $(STEP_TAGS)   INVENTORY=$(INVENTORY)"
-	@echo "  run       (mixed)  apply the step"
-	@echo "  dry       (agent)  --check --diff, no changes"
-	@echo "  verify    (agent)  run verify-terra.yml"
+	@echo "  run       (mixed)  apply the step (logged)"
+	@echo "  dry       (agent)  --check --diff, no changes (logged)"
+	@echo "  verify    (agent)  run verify-terra.yml (logged)"
 	@echo "  up        (agent)  build+start the mock container"
 	@echo "  down      (agent)  stop+remove the mock container"
 	@echo "  shell     (human)  interactive shell in the mock container"
@@ -36,18 +39,19 @@ help:
 	@echo "  logs      (mixed)  follow the mock container logs"
 	@echo "  clean     (agent)  remove local test artifacts"
 	@echo "  EXTRA_ARGS='...'   extra ansible-playbook args (e.g. -e k=v)"
+	@echo "  logs written to $(LOG_DIR)/latest.log (or <timestamp>-<tag>.log)"
 
 run:
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
-	ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) $(EXTRA_ARGS) -v
+	$(RUN_LOG) $(LOG_LABEL) ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) $(EXTRA_ARGS) -v
 
 dry:
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
-	ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) --check --diff $(EXTRA_ARGS) -v
+	$(RUN_LOG) $(LOG_LABEL)-dry ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) --check --diff $(EXTRA_ARGS) -v
 
 verify:
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
-	ansible-playbook -i $(INVENTORY) $(VERIFY_PLAYBOOK) $(EXTRA_ARGS) -v
+	$(RUN_LOG) $(LOG_LABEL)-verify ansible-playbook -i $(INVENTORY) $(VERIFY_PLAYBOOK) $(EXTRA_ARGS) -v
 
 up:
 	docker compose -f $(COMPOSE) up -d --build

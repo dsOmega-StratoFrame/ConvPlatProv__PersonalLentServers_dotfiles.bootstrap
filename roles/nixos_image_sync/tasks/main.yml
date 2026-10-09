@@ -37,13 +37,14 @@
   ansible.builtin.fail:
     msg: >-
       Automatic rsync installation is only implemented for the Debian family;
-      {{ inventory_hostname }} reports '{{ ansible_os_family }}'. Install rsync
+      {{ inventory_hostname }} reports "{{ ansible_facts['os_family'] }}".
+      Install rsync
       manually or set nixos_image_sync_require_rsync=false.
   when:
     - nixos_image_sync_require_rsync
     - nixos_image_sync_rsync_check.rc != 0
     - nixos_image_sync_install_rsync
-    - ansible_os_family != 'Debian'
+    - ansible_facts['os_family'] != 'Debian'
 
 - name: Install rsync when missing and permitted
   ansible.builtin.apt:
@@ -54,7 +55,7 @@
     - nixos_image_sync_require_rsync
     - nixos_image_sync_rsync_check.rc != 0
     - nixos_image_sync_install_rsync
-    - ansible_os_family == 'Debian'
+    - ansible_facts['os_family'] == 'Debian'
 
 - name: Ensure the staging directory exists on @terra
   ansible.builtin.file:

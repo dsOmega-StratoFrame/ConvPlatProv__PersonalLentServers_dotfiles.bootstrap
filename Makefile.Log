@@ -1,0 +1,23 @@
+# Shared logging for every ansible-running target.
+#
+# Included by Makefile (operator entrypoints) and Makefile.Steps (per-step
+# targets). A run writes combined output to
+#   $(LOG_DIR)/<YYYYmmddTHHMMSS>-<label>.log
+# and refreshes $(LOG_DIR)/latest.log. Override LOG_DIR / LOG_FILE / LOG_LABEL.
+#
+# Not wrapped: interactive targets (shell, shell-ssh, vault-edit-terra) and the
+# non-ansible unit target.
+
+LOG_DIR ?= $(CURDIR)/logs
+RUN_LOG ?= bash $(CURDIR)/bin/run-log
+LOG_LABEL ?= $(if $(STEP_TAGS),$(STEP_TAGS),$(if $(TAGS),$(TAGS),all))
+
+.PHONY: run-log
+
+# Generic logged runner for ad-hoc commands:
+#   make run-log CMD='ansible-playbook ...' [LOG_LABEL=name]
+run-log:
+	@if [ -z '$(CMD)' ]; then \
+		echo "usage: make run-log CMD='<command>' [LOG_LABEL=name]"; exit 2; \
+	fi
+	$(RUN_LOG) $(LOG_LABEL) $(CMD)

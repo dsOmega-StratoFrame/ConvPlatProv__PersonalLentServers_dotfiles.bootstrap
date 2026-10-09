@@ -35,10 +35,11 @@
       ansible.builtin.fail:
         msg: >-
           Automatic Docker CE installation is only implemented for the Debian
-          family; {{ inventory_hostname }} reports '{{ ansible_os_family }}'.
+          family; {{ inventory_hostname }} reports
+          "{{ ansible_facts['os_family'] }}".
           Install Docker from the TOS App Center or set
           bootstrap_docker_install_method=manual.
-      when: ansible_os_family != 'Debian'
+      when: ansible_facts['os_family'] != 'Debian'
 
     - name: Ensure apt prerequisites for the Docker repository
       ansible.builtin.apt:
@@ -46,6 +47,8 @@
           - ca-certificates
           - curl
           - gnupg
+          # deb822_repository (below) needs the python-debian bindings.
+          - python3-debian
         state: present
         update_cache: true
 
@@ -61,13 +64,26 @@
         dest: "{{ bootstrap_docker_gpg_path }}"
         mode: "0644"
 
+    # deb822_repository replaces the deprecated apt_repository (removal
+    # announced for ansible-core 2.25) and writes
+    # sources.list.d/docker.sources.
     - name: Add the Docker apt repository
-      ansible.builtin.apt_repository:
-        repo: >-
-          deb [arch={{ bootstrap_docker_apt_arch }} signed-by={{ bootstrap_docker_gpg_path }}]
-          {{ bootstrap_docker_apt_base_url }} {{ bootstrap_docker_apt_suite }} {{ bootstrap_docker_apt_channel }}
-        filename: docker
+      ansible.builtin.deb822_repository:
+        name: docker
+        types: deb
+        uris: "{{ bootstrap_docker_apt_base_url }}"
+        suites: "{{ bootstrap_docker_apt_suite }}"
+        components: "{{ bootstrap_docker_apt_channel }}"
+        architectures: "{{ bootstrap_docker_apt_arch }}"
+        signed_by: "{{ bootstrap_docker_gpg_path }}"
         state: present
+
+    # The pre-deb822 role wrote sources.list.d/docker.list; drop it so apt does
+    # not see the repository twice.
+    - name: Remove the legacy Docker apt source
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/docker.list
+        state: absent
 
     - name: Install Docker packages
       ansible.builtin.apt:

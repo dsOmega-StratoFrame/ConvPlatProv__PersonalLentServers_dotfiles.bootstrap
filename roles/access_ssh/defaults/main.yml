@@ -5,11 +5,15 @@
 access_ssh_user: "{{ ansible_user | default('root') }}"
 access_ssh_private_key_file: "{{ deploy_ssh_private_key_file | default('~/.ssh/id_ed25519') }}"
 access_ssh_public_key: "{{ lookup('file', access_ssh_private_key_file + '.pub') }}"
-# Connection target/port for the manual `ssh` checks. Defaults to the inventory
-# host, but honours ansible_host/ansible_port so the same role works against a
-# containerized mock host.
-access_ssh_connect_host: "{{ ansible_host | default(inventory_hostname) }}"
-access_ssh_port_arg: "{{ ('-p ' ~ (ansible_port | string)) if (ansible_port is defined and ansible_port) else '' }}"
+# Connection target/port for the manual `ssh` checks. These tasks run with
+# `delegate_to: localhost`, which re-scopes the connection vars: `ansible_host`
+# becomes `localhost` (and `ansible_port` is dropped) unless it was explicitly
+# set in the inventory. Read the *inventory* host's values from hostvars instead
+# so the checks target the same host Ansible connects to — and still honour an
+# explicit ansible_host/ansible_port on a mock host.
+access_ssh_connect_host: "{{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}"
+access_ssh_connect_port: "{{ hostvars[inventory_hostname].ansible_port | default('') }}"
+access_ssh_port_arg: "{{ ('-p ' ~ (access_ssh_connect_port | string)) if access_ssh_connect_port else '' }}"
 # Only required on the very first run, while the account still authenticates by
 # password. Keep it in the host vault; leave empty once key access exists.
 access_ssh_password: ""
