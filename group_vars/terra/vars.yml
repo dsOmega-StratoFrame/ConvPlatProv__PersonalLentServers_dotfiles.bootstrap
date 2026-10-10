@@ -62,6 +62,18 @@ access_ssh_generate_key: false # key already deployed
 # backup_tos
 backup_tos_local_dir: "{{ playbook_dir }}/backups"
 
+# bootstrap_base — the NAS network blocks the default Ubuntu mirrors, so apt
+# hangs on connect. Repoint the Ubuntu sources at the first reachable candidate
+# before installing anything (toggleable; the role default is off). Only Ubuntu
+# hostnames are rewritten; TOS's own repo is left alone.
+bootstrap_base_apt_mirror_enabled: true
+bootstrap_base_apt_mirror_suite: "jammy"
+bootstrap_base_apt_mirror_candidates:
+  - "http://ru.archive.ubuntu.com/ubuntu"
+  - "https://mirror.yandex.ru/ubuntu"
+  - "http://mirror.truenetwork.ru/ubuntu"
+  - "http://ubuntu.mipt.ru/ubuntu"
+
 # bootstrap_nix — leave empty to use the version tested by the galaxy role.
 bootstrap_nix_version: ""
 bootstrap_nix_installer_checksum: ""

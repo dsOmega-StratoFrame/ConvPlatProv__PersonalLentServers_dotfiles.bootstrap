@@ -1,6 +1,9 @@
 ---
+# `command` is a POSIX shell builtin; ansible.builtin.command does NOT invoke a
+# shell, so it fails with rc 2 every time and every command looks missing. Use
+# the shell module (noqa: shell is required for the builtin).
 - name: Detect required commands
-  ansible.builtin.command: "command -v {{ item }}"
+  ansible.builtin.shell: "command -v {{ item }}"  # noqa: command-instead-of-shell
   loop: "{{ bootstrap_base_required_commands }}"
   register: bootstrap_base_command_checks
   changed_when: false
@@ -35,7 +38,7 @@
 # Re-detect after the install attempt so the failure below reflects reality
 # rather than the pre-install snapshot.
 - name: Re-detect required commands after the install attempt
-  ansible.builtin.command: "command -v {{ item }}"
+  ansible.builtin.shell: "command -v {{ item }}"  # noqa: command-instead-of-shell
   loop: "{{ bootstrap_base_required_commands }}"
   register: bootstrap_base_command_rechecks
   changed_when: false
@@ -44,22 +47,26 @@
     - bootstrap_base_manage_packages
     - bootstrap_base_missing_commands | length > 0
 
+# When the re-detect is skipped, the loop register holds per-item results with
+# no `rc`; filter those out first or selectattr('rc', ...) raises
+# "object of type 'dict' has no attribute 'rc'".
 - name: Record commands still missing after the install attempt
   ansible.builtin.set_fact:
     bootstrap_base_still_missing_commands: >-
       {{ (bootstrap_base_command_rechecks.results | default([]))
-         | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}
+         | selectattr('rc', 'defined') | selectattr('rc', 'ne', 0)
+         | map(attribute='item') | list }}
 
 - name: Fail when prerequisites are still missing
   ansible.builtin.fail:
     msg: >-
-      Missing required commands {{ bootstrap_base_still_missing_commands | join(', ') }}
+      Missing required commands {{ bootstrap_base_still_missing_commands | default([]) | join(', ') }}
       on {{ inventory_hostname }} (pkg_mgr "{{ ansible_facts['pkg_mgr'] }}") could not
       be installed automatically. Install them manually or disable
       bootstrap_base_manage_packages.
   when:
     - bootstrap_base_manage_packages
-    - bootstrap_base_still_missing_commands | length > 0
+    - bootstrap_base_still_missing_commands | default([]) | length > 0
 
 - name: Detect the installed xz version
   ansible.builtin.command: "xz --version"

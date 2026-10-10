@@ -1,6 +1,8 @@
 ---
+# `command` is a shell builtin; ansible.builtin.command does not invoke a shell,
+# so this always returned rc 2 and Nix was reinstalled on every run.
 - name: Check whether Nix is already installed
-  ansible.builtin.command: "command -v nix"
+  ansible.builtin.shell: "command -v nix"  # noqa: command-instead-of-shell
   register: bootstrap_nix_command
   changed_when: false
   failed_when: false

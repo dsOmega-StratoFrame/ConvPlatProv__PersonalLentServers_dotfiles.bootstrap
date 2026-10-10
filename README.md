@@ -47,6 +47,11 @@ The playbook runs these roles in order:
    affected by CVE-2024-3094 (5.6.0 / 5.6.1). Package selection keys on
    `ansible_pkg_mgr == 'apt'`, not `os_family == 'Debian'` — TOS 6 reports
    `OtherLinux` yet is apt-based, and its apt package name is `xz-utils`.
+   Optionally repoints the Ubuntu apt sources at the first reachable mirror
+   before installing (`bootstrap_base_apt_mirror_enabled`, off by default);
+   `@terra` enables it because its network blocks the default Ubuntu mirrors and
+   apt otherwise hangs on connect. Only Ubuntu hostnames are rewritten, with a
+   timestamped backup of each edited source file.
 5. **`bootstrap_nix`** — installs the Nix package manager (multi-user, systemd)
    via the pinned `danielrolls.nix` role and enables `nix-command` + `flakes`.
 6. **`bootstrap_docker`** — detects the Docker shipped with TOS 6 and only

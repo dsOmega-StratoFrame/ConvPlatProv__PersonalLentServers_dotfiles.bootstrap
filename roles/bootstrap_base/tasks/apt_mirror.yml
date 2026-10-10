@@ -1,0 +1,107 @@
+---
+# Optionally repoint Ubuntu apt sources at a reachable mirror. Runs before
+# dependencies.yml installs anything, because on a network that blocks the
+# default Ubuntu mirrors apt hangs on connect (the apt module shells out to
+# `apt-get update` / `apt-get -y install`). Off by default; only Ubuntu
+# hostnames are rewritten, so other sources (TOS's own repo, Docker) are left
+# untouched. See group_vars/terra/vars.yml.
+
+- name: Assert the apt mirror is configured when enabled
+  ansible.builtin.assert:
+    that:
+      - bootstrap_base_apt_mirror_suite | length > 0
+      - bootstrap_base_apt_mirror_suite != 'NA'
+      - bootstrap_base_apt_mirror_candidates | length > 0
+    fail_msg: >-
+      bootstrap_base_apt_mirror_enabled is true but the suite/candidates are not
+      configured. Set bootstrap_base_apt_mirror_suite (e.g. "jammy") and a
+      non-empty bootstrap_base_apt_mirror_candidates list in group_vars.
+  when:
+    - bootstrap_base_apt_mirror_enabled | bool
+    - ansible_facts['pkg_mgr'] == 'apt'
+
+# validate_certs is off deliberately: this is a reachability probe, and the
+# target may not yet have ca-certificates (installing it is the point of this
+# role). apt still validates TLS on its own for any https source we select.
+- name: Probe candidate apt mirrors
+  ansible.builtin.uri:
+    url: "{{ item }}/dists/{{ bootstrap_base_apt_mirror_suite }}/Release"
+    method: GET
+    status_code: 200
+    timeout: "{{ bootstrap_base_apt_mirror_timeout }}"
+    validate_certs: false
+  loop: "{{ bootstrap_base_apt_mirror_candidates }}"
+  register: bootstrap_base_apt_mirror_probe
+  failed_when: false
+  changed_when: false
+  when:
+    - bootstrap_base_apt_mirror_enabled | bool
+    - ansible_facts['pkg_mgr'] == 'apt'
+
+- name: Select the first reachable mirror
+  ansible.builtin.set_fact:
+    bootstrap_base_apt_mirror: >-
+      {{ (bootstrap_base_apt_mirror_probe.results | default([])
+          | selectattr('status', 'defined')
+          | selectattr('status', 'equalto', 200)
+          | map(attribute='item') | list | first) | default('') }}
+  when:
+    - bootstrap_base_apt_mirror_enabled | bool
+    - ansible_facts['pkg_mgr'] == 'apt'
+
+- name: Fail when no candidate mirror is reachable
+  ansible.builtin.fail:
+    msg: >-
+      None of the apt mirror candidates are reachable from {{ inventory_hostname }}
+      for suite {{ bootstrap_base_apt_mirror_suite }}:
+      {{ bootstrap_base_apt_mirror_candidates | join(', ') }}. Check the NAS
+      network/DNS, or add a reachable mirror to
+      bootstrap_base_apt_mirror_candidates.
+  when:
+    - bootstrap_base_apt_mirror_enabled | bool
+    - ansible_facts['pkg_mgr'] == 'apt'
+    - bootstrap_base_apt_mirror | default('') | length == 0
+
+- name: Find apt source files
+  ansible.builtin.find:
+    paths: /etc/apt
+    recurse: true
+    file_type: file
+    patterns:
+      - sources.list
+      - "*.list"
+      - "*.sources"
+  register: bootstrap_base_apt_source_files
+  when:
+    - bootstrap_base_apt_mirror_enabled | bool
+    - ansible_facts['pkg_mgr'] == 'apt'
+    - bootstrap_base_apt_mirror | default('') | length > 0
+
+# backup: true leaves a timestamped copy next to each edited file, so the
+# original sources are recoverable if a mirror misbehaves.
+- name: Repoint Ubuntu apt sources at the reachable mirror
+  ansible.builtin.replace:
+    path: "{{ item.path }}"
+    regexp: 'https?://(archive|security|ports)\.ubuntu\.com/ubuntu'
+    replace: "{{ bootstrap_base_apt_mirror }}"
+    backup: true
+  loop: "{{ bootstrap_base_apt_source_files.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: bootstrap_base_apt_mirror_rewrite
+  when:
+    - bootstrap_base_apt_mirror_enabled | bool
+    - ansible_facts['pkg_mgr'] == 'apt'
+    - bootstrap_base_apt_mirror | default('') | length > 0
+
+- name: Report the apt mirror
+  ansible.builtin.debug:
+    msg: >-
+      apt Ubuntu sources repointed to {{ bootstrap_base_apt_mirror }}; changed
+      {{ bootstrap_base_apt_mirror_rewrite.results | default([])
+         | selectattr('changed', 'defined') | selectattr('changed')
+         | list | length }} file(s).
+  when:
+    - bootstrap_base_apt_mirror_enabled | bool
+    - ansible_facts['pkg_mgr'] == 'apt'
+    - bootstrap_base_apt_mirror | default('') | length > 0

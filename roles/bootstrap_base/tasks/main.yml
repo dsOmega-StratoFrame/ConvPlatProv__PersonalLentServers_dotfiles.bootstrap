@@ -1,4 +1,9 @@
 ---
+# Repoint the apt mirror first (when enabled) so the dependency install below
+# does not hang on an unreachable default Ubuntu mirror.
+- name: Configure the apt mirror
+  ansible.builtin.import_tasks: apt_mirror.yml
+
 - name: Load OS-specific variables
   ansible.builtin.import_tasks: variables.yml
 

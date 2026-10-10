@@ -276,6 +276,24 @@ def test_base_var_lookup_selects_by_pkg_mgr():
     assert "xz-utils" in apt["bootstrap_base_packages"]
 
 
+COMMAND_BUILTIN_VIA_COMMAND = re.compile(r"command:\s*['\"]?command -v")
+
+
+def test_command_v_is_not_run_via_the_command_module():
+    """`command` is a shell builtin and ansible.builtin.command does not invoke a
+    shell, so `command -v X` fails with rc 2 for every X and makes every lookup
+    report 'missing'. Such detection must use the shell module."""
+    offenders = []
+    paths = list(ROLES_DIR.rglob("*.yml")) + sorted(REPO.glob("*.yml"))
+    for path in paths:
+        for match in COMMAND_BUILTIN_VIA_COMMAND.finditer(path.read_text()):
+            offenders.append(f"{path.relative_to(REPO)}: {match.group(0)!r}")
+    assert not offenders, (
+        "`command -v` must not run via ansible.builtin.command (use shell): "
+        + ", ".join(offenders)
+    )
+
+
 OS_FAMILY_DEBIAN_GATE = re.compile(r"ansible_facts\['os_family'\]\s*[!=]=\s*'Debian'")
 
 

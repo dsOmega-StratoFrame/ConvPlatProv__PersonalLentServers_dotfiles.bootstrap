@@ -70,7 +70,7 @@ The deployment decomposes into small roles, each a single concern:
 |---|---|
 | `backup_tos` | snapshot TOS config |
 | `access_ssh` | establish key-based SSH (generate/upload the deployment keypair) |
-| `bootstrap_base` | minimal base prerequisites |
+| `bootstrap_base` | minimal base prerequisites; optional Ubuntu apt-mirror repoint (Decision 8b) |
 | `bootstrap_nix` | Nix (multi-user) via the pinned galaxy role |
 | `bootstrap_docker` | detect/ensure Docker |
 | `nixos_image_artifact` | locate + checksum the image artifact (control node) |
@@ -159,6 +159,43 @@ Docker's `jammy` apt suite is unaffected: it remains the correct Docker CE
 suite for TOS 6's Ubuntu-22.04 compatibility; only the install gate is keyed on
 `pkg_mgr`.
 
+### 8b. Default Ubuntu mirrors are not assumed reachable — opt-in, Ubuntu-scoped apt mirror
+
+The NAS network blocks the default Ubuntu mirrors (`archive.ubuntu.com` /
+`security.ubuntu.com`). With untouched `/etc/apt` sources, `bootstrap_base`'s
+package install hangs on connect: the `apt` module shells out to `apt-get update`
+/ `apt-get -y install`, which never returns. Confirmed on the live device —
+`logs/20261009T233042-base.log` ends at the "Install base packages (apt)" task.
+
+Decision: `bootstrap_base` **must not assume the default Ubuntu mirrors are
+reachable.** It runs an **off-by-default** pre-step
+(`roles/bootstrap_base/tasks/apt_mirror.yml`, imported before
+`variables.yml`/`dependencies.yml`). When `bootstrap_base_apt_mirror_enabled` is
+true it:
+
+1. asserts a suite and a non-empty candidate list are configured;
+2. probes `<base>/dists/<suite>/Release` for each candidate (`status_code: 200`,
+   `validate_certs: false` — a reachability probe only, since `ca-certificates`
+   may not be installed yet);
+3. selects the first candidate answering 200, and fails with guidance if none do;
+4. rewrites **only Ubuntu hostnames**
+   (`https?://(archive|security|ports)\.ubuntu\.com/ubuntu`) in the `/etc/apt`
+   source files, with `backup: true`.
+
+The suite is explicit (`jammy`) because TOS 6 reports
+`distribution_release: NA` (Decision 8a), so it cannot be derived from facts.
+Non-Ubuntu sources — TOS's own repo, Docker's — are deliberately out of scope, so
+the change cannot disturb the appliance's own package feeds. `@terra` enables the
+feature in `group_vars/terra/vars.yml`; every other host keeps the role default
+(`false`).
+
+Consequences: the opt-in default keeps the role deterministic for hosts whose
+default mirrors work, and the Ubuntu-hostname scope plus per-file backups bound
+the blast radius. **Residual risk / fallback:** if `apt-get` still stalls once a
+reachable mirror has been selected, the TOS `apt`/`apt-get` wrapper
+(`/etc/tos/scripts/apt*`) is intercepting the call and stdin would have to be fed
+`yes`; that is not implemented.
+
 ## Consequences
 
 **Positive**
@@ -180,6 +217,10 @@ suite for TOS 6's Ubuntu-22.04 compatibility; only the install gate is keyed on
 - The Ubuntu-`jammy` Docker fallback assumes TOS 6 keeps its Ubuntu-22.04
   compatibility; `manual` mode is the escape hatch. This is a repository-suite
   choice, not OS detection — the install gate is `pkg_mgr`-based (Decision 8a).
+- A blocked default Ubuntu mirror is handled by an opt-in,
+  Ubuntu-hostname-scoped apt-source rewrite (Decision 8b), backed up per file.
+  Untested residual risk: TOS's own apt wrapper can still intercept `apt-get`
+  even against a reachable mirror.
 - Nix sandboxing may be restricted by the NAS kernel.
 - De-provisioning is conservative: Docker is never removed unless this repo
   installed it.

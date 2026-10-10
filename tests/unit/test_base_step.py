@@ -12,8 +12,11 @@ import yaml
 from jinja2 import Template
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULTS_PATH = REPO / "roles" / "bootstrap_base" / "defaults" / "main.yml"
-TASKS_PATH = REPO / "roles" / "bootstrap_base" / "tasks" / "dependencies.yml"
+ROLE = REPO / "roles" / "bootstrap_base"
+DEFAULTS_PATH = ROLE / "defaults" / "main.yml"
+TASKS_PATH = ROLE / "tasks" / "dependencies.yml"
+MIRROR_TASKS_PATH = ROLE / "tasks" / "apt_mirror.yml"
+MAIN_TASKS_PATH = ROLE / "tasks" / "main.yml"
 
 # Mirrors the `when:` expression in roles/bootstrap_base/tasks/dependencies.yml.
 BLOCKED_EXPR = "{{ blocked | select('in', stdout) | list | length > 0 }}"
@@ -57,7 +60,85 @@ def test_fail_path_rechecks_after_the_install_attempt():
         "Re-detect required commands" in (task.get("name") or "") for task in tasks
     ), "missing post-install re-detect task"
     fail = _find_task(tasks, "Fail when prerequisites are still missing")
-    assert "bootstrap_base_still_missing_commands | length > 0" in fail["when"]
+    assert any(
+        "bootstrap_base_still_missing_commands" in cond for cond in fail["when"]
+    )
+
+
+def test_still_missing_tolerates_skipped_loop_results():
+    """A skipped loop task registers per-item results that have no `rc`; the
+    expression must filter those out, not raise 'object of type dict has no
+    attribute rc' (hit when nothing was missing, so the re-detect was skipped)."""
+    tasks = yaml.safe_load(TASKS_PATH.read_text())
+    task = _find_task(tasks, "Record commands still missing")
+    expr = task["ansible.builtin.set_fact"]["bootstrap_base_still_missing_commands"]
+
+    skipped = {
+        "results": [
+            {"item": "curl", "skipped": True},
+            {"item": "xz", "skipped": True},
+        ]
+    }
+    assert Template(expr).render(bootstrap_base_command_rechecks=skipped).strip() == "[]"
+
+    still_missing = {"results": [{"item": "curl", "rc": 0}, {"item": "xz", "rc": 1}]}
+    rendered = Template(expr).render(bootstrap_base_command_rechecks=still_missing)
+    assert "'xz'" in rendered
+    assert "curl" not in rendered
+
+    # No loop results at all (whole task skipped).
+    assert Template(expr).render(bootstrap_base_command_rechecks={"skipped": True}).strip() == "[]"
+
+
+def test_command_detection_goes_through_a_shell():
+    """`command` is a shell builtin; ansible.builtin.command does not invoke a
+    shell, so `command -v X` returned rc 2 for every X and every required command
+    looked missing. Detection must use the shell module."""
+    tasks = yaml.safe_load(TASKS_PATH.read_text())
+    for name in ("Detect required commands", "Re-detect required commands"):
+        task = _find_task(tasks, name)
+        assert "ansible.builtin.shell" in task, f"{name!r} must use the shell module"
+        assert "ansible.builtin.command" not in task
+
+
+def test_apt_mirror_is_toggleable_and_off_by_default(defaults):
+    # Opt-in: no source rewriting unless a host enables it.
+    assert defaults["bootstrap_base_apt_mirror_enabled"] is False
+    assert defaults["bootstrap_base_apt_mirror_suite"] == ""
+    assert defaults["bootstrap_base_apt_mirror_candidates"] == []
+
+
+def test_main_configures_the_apt_mirror_before_installing():
+    tasks = yaml.safe_load(MAIN_TASKS_PATH.read_text())
+    imports = [t.get("ansible.builtin.import_tasks") for t in tasks]
+    assert "apt_mirror.yml" in imports
+    assert imports.index("apt_mirror.yml") < imports.index("dependencies.yml")
+
+
+def test_apt_mirror_probes_candidates_and_selects_first_reachable():
+    tasks = yaml.safe_load(MIRROR_TASKS_PATH.read_text())
+    probe = _find_task(tasks, "Probe candidate apt mirrors")
+    uri = probe["ansible.builtin.uri"]
+    assert uri["status_code"] == 200
+    assert probe["loop"] == "{{ bootstrap_base_apt_mirror_candidates }}"
+    assert probe["failed_when"] is False
+    select = _find_task(tasks, "Select the first reachable mirror")
+    expr = select["ansible.builtin.set_fact"]["bootstrap_base_apt_mirror"]
+    assert "selectattr('status', 'equalto', 200)" in expr
+    assert "| first" in expr
+
+
+def test_apt_mirror_rewrites_only_ubuntu_hostnames():
+    # Other sources (TOS's own repo, Docker) must be left untouched.
+    text = MIRROR_TASKS_PATH.read_text()
+    assert r"(archive|security|ports)\.ubuntu\.com/ubuntu" in text
+    rewrite = _find_task(
+        yaml.safe_load(text), "Repoint Ubuntu apt sources at the reachable mirror"
+    )
+    replace = rewrite["ansible.builtin.replace"]
+    assert replace["backup"] is True
+    assert "archive" in replace["regexp"]
+    assert "ubuntu" in replace["regexp"]
 
 
 def _is_blocked(stdout: str, blocked: list) -> bool:

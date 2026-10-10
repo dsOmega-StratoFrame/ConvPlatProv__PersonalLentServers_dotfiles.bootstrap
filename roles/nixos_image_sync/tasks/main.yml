@@ -16,8 +16,9 @@
   ansible.builtin.set_fact:
     nixos_image_sync_remote_archive: "{{ nixos_image_sync_remote_dir }}/{{ nixos_image_artifact_checksum }}.tar.xz"
 
+# `command` is a shell builtin; ansible.builtin.command does not invoke a shell.
 - name: Detect rsync on @terra
-  ansible.builtin.command: "command -v rsync"
+  ansible.builtin.shell: "command -v rsync"  # noqa: command-instead-of-shell
   register: nixos_image_sync_rsync_check
   changed_when: false
   failed_when: false

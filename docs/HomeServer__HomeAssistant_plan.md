@@ -82,6 +82,26 @@ debugging.
    repo-wide by `test_roles_gate_package_management_on_pkg_mgr_not_os_family`.
    Docker CE's `jammy` apt-suite selection is unaffected — that is a repository
    choice, not an OS-detection gate.
+6. **Default Ubuntu mirrors are not assumed reachable — confirmed on the live
+   device (base revision `523dfdb`, before the build fix).** The NAS network
+   blocks `archive.ubuntu.com` / `security.ubuntu.com`, so `make run TAGS=base`
+   hangs at "Install base packages (apt)": the `apt` module shells out to
+   `apt-get update` / `apt-get -y install` and sits on connect
+   (`logs/20261009T233042-base.log` ends at that task; user-confirmed).
+   `bootstrap_base` therefore runs an optional `tasks/apt_mirror.yml` **first**
+   (imported before `variables.yml`/`dependencies.yml`). When
+   `bootstrap_base_apt_mirror_enabled` is true it asserts a suite + candidates,
+   probes each candidate at `<base>/dists/<suite>/Release` via
+   `ansible.builtin.uri` (HTTP 200, `validate_certs: false` because
+   `ca-certificates` may not be installed yet — reachability only), selects the
+   first reachable candidate, fails with guidance if none are, and rewrites
+   **only Ubuntu hostnames**
+   (`https?://(archive|security|ports)\.ubuntu\.com/ubuntu`) in `/etc/apt`
+   source files with `backup: true`. Non-Ubuntu sources (TOS's own repo, Docker)
+   are left untouched. It is **off by default**; `@terra` enables it
+   (`bootstrap_base_apt_mirror_suite: "jammy"`; candidates
+   `ru.archive.ubuntu.com`, `mirror.yandex.ru`, `mirror.truenetwork.ru`,
+   `ubuntu.mipt.ru`). Tests: `tests/unit/test_base_step.py`.
 
 ## 4. Phases
 
@@ -187,7 +207,7 @@ Four layers, cheapest first:
 
 | Layer | Command | Checks |
 |---|---|---|
-| Unit | `make unit` | repo structure, role var namespacing, pinned deps, docker apt-line logic |
+| Unit | `make unit` | repo structure, role var namespacing, pinned deps, docker apt-line logic, apt-mirror probe/rewrite logic |
 | Integration | `make it-up && make it-run [TAGS=…] && make it-down` | the real roles against the mock `@terra` container |
 | E2E | `make run [TAGS=…]`, `make test` | the real roles against the real NAS + `verify-terra.yml` |
 | Lint | `make check`, `make lint` | playbook syntax, ansible-lint |
@@ -205,6 +225,7 @@ Four layers, cheapest first:
 | `access_ssh` | remove the uploaded key from the target account |
 | Nix | run the installer's uninstall script |
 | Docker | remove only if `bootstrap_docker_managed_by_us` is true |
+| apt sources repointed to a custom mirror | restore the timestamped `backup` copy next to each edited `/etc/apt` source file (or clear `bootstrap_base_apt_mirror_enabled`) |
 
 ## 8. Completion evidence
 
@@ -227,6 +248,13 @@ Four layers, cheapest first:
 4. Whether Nix sandboxing works on the TOS 6 kernel.
 5. `@terra` reachability: the connection host comes from the inventory
    (`terra-local`); confirm it resolves on the control node.
+6. **apt still hangs after a reachable mirror is selected.** The TOS
+   `apt`/`apt-get` shell wrappers (`/etc/tos/scripts/apt*`, aliased in
+   `/root/.bashrc`) can intercept `apt-get` and read stdin; if the install still
+   stalls even though `apt_mirror.yml` selected a reachable mirror, feeding `yes`
+   to the wrapper would be required. Not implemented — `apt_mirror.yml` only
+   handles mirror reachability. (The TOS `apt` confirmation prompt is a separate
+   concern: the `apt` module invokes `apt-get`, not `apt`.)
 
 ## 10. Testing per step (matrix)
 
@@ -237,7 +265,7 @@ layer does not add signal for that step.
 |---|---|---|---|---|
 | backup (`backup`) | structure tests | `make it-run TAGS=backup` | `make run TAGS=backup` | `Makefile.BackupTos` |
 | access (`access`) | structure tests | `make it-run TAGS=access` | `make run TAGS=access` | `Makefile.AccessSsh` |
-| base (`base`) | structure tests | `make it-run TAGS=base` | `make run TAGS=base` | `Makefile.Steps` (via any) |
+| base (`base`) | `test_base_step.py` | `make it-run TAGS=base` | `make run TAGS=base` | `Makefile.Steps` (via any) |
 | nix (`nix`) | — | `make it-run TAGS=nix` | `make run TAGS=nix` | `Makefile.NixBootstrap` |
 | docker (`docker`) | `test_docker_step.py` | `make it-run TAGS=docker` | `make run TAGS=docker`, `make test` | `Makefile.DockerDeployment` |
 | image (`image`) | `test_nixos_image_step.py` | `make it-run TAGS=image` | `make -f Makefile.NixosImage run` | `Makefile.NixosImage` |
