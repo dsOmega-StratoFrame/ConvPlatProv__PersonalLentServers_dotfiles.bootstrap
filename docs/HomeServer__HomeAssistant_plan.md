@@ -10,6 +10,10 @@ Companion documents:
   [`adr/0001-HomeServer__HomeAssistant.md`](./adr/0001-HomeServer__HomeAssistant.md)
 - Cross-repo image-tag contract:
   [`adr/0002-ContentAddressableImageTag.md`](./adr/0002-ContentAddressableImageTag.md)
+- TOS 6 platform decisions (split out of ADR 0001 §8):
+  [`adr/0003-Tos6PrivilegeModel.md`](./adr/0003-Tos6PrivilegeModel.md),
+  [`adr/0004-Tos6OsDetection.md`](./adr/0004-Tos6OsDetection.md),
+  [`adr/0005-AptMirrorRepoint.md`](./adr/0005-AptMirrorRepoint.md)
 
 ## 1. Inputs & pinned revisions
 
@@ -39,7 +43,7 @@ debugging.
 ## 3. Assumptions
 
 1. TOS 6 SSH is enabled manually and uses the superuser account `terra`.
-2. **TOS 6 OS detection — confirmed on the live device (revision `f1d3d1a` +
+2. **TOS 6 OS detection (see [ADR 0004](./adr/0004-Tos6OsDetection.md)) — confirmed on the live device (revision `f1d3d1a` +
    build fix).** A verbose `gather_facts` run
    (`logs/20261006T212942-access_ssh.log`) reports `ansible_distribution:
    OtherLinux`, `ansible_distribution_release: NA`,
@@ -51,7 +55,7 @@ debugging.
    (`{{ ansible_facts['pkg_mgr'] }}-family.yml`), ahead of the `os_family`
    candidate; `default.yml` remains the last-resort fallback.
 3. The NAS admin password is new and stored only in `group_vars/terra/vault`.
-4. **TOS 6 privilege model — confirmed on the live device (revision
+4. **TOS 6 privilege model (see [ADR 0003](./adr/0003-Tos6PrivilegeModel.md)) — confirmed on the live device (revision
    `f1d3d1a` + build fix).** The first/admin account `terra` (the SSH user,
    `ansible_user: terra`) is **uid 0 and root-equivalent**; the separate `root`
    account is **uid 9999 and unprivileged** (empty capability set). Ansible's
@@ -70,7 +74,7 @@ debugging.
    Evidence: `logs/20261006T212942-access_ssh.log` (`ansible_user_uid=9999`,
    `SUDO_UID=0`, `SUDO_USER=terra`); corroborated by TerraMaster community
    documentation.
-5. **Package-management convention — confirmed on the live device.**
+5. **Package-management convention (see [ADR 0004](./adr/0004-Tos6OsDetection.md)) — confirmed on the live device.**
    Package-management decisions **must** key on
    `ansible_facts['pkg_mgr'] == 'apt'` (`!=` for the non-apt path), never on
    `os_family == 'Debian'` or a `distribution*` fact: TOS 6 reports
@@ -82,7 +86,7 @@ debugging.
    repo-wide by `test_roles_gate_package_management_on_pkg_mgr_not_os_family`.
    Docker CE's `jammy` apt-suite selection is unaffected — that is a repository
    choice, not an OS-detection gate.
-6. **Default Ubuntu mirrors are not assumed reachable — confirmed on the live
+6. **Default Ubuntu mirrors are not assumed reachable (see [ADR 0005](./adr/0005-AptMirrorRepoint.md)) — confirmed on the live
    device (base revision `523dfdb`, before the build fix).** The NAS network
    blocks `archive.ubuntu.com` / `security.ubuntu.com`, so `make run TAGS=base`
    hangs at "Install base packages (apt)": the `apt` module shells out to

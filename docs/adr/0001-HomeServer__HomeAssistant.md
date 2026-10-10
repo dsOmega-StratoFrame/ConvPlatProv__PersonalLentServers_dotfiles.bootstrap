@@ -70,7 +70,7 @@ The deployment decomposes into small roles, each a single concern:
 |---|---|
 | `backup_tos` | snapshot TOS config |
 | `access_ssh` | establish key-based SSH (generate/upload the deployment keypair) |
-| `bootstrap_base` | minimal base prerequisites; optional Ubuntu apt-mirror repoint (Decision 8b) |
+| `bootstrap_base` | minimal base prerequisites; optional Ubuntu apt-mirror repoint (ADR 0005) |
 | `bootstrap_nix` | Nix (multi-user) via the pinned galaxy role |
 | `bootstrap_docker` | detect/ensure Docker |
 | `nixos_image_artifact` | locate + checksum the image artifact (control node) |
@@ -107,94 +107,17 @@ The cross-repo contract for deriving that tag — one shared command
   systemd) rather than a bespoke script; this repo adds only the
   HomeServer-specific `nix.conf` settings and verification.
 
-### 8. TOS 6 privilege model — the SSH account is already uid 0
+### 8. TOS 6 platform specifics
 
-On TOS 6 the first/admin account (`terra`, the SSH user / `ansible_user`) is
-**uid 0 and root-equivalent**, while the separate `root` account is **uid 9999
-and unprivileged** with an empty capability set. Confirmed on the live device via
-the verbose run log: after Ansible's `sudo -H -S ... -u root ... BECOME-SUCCESS`,
-the facts report `ansible_user_uid=9999`,
-`ansible_system_capabilities=[""]`, `SUDO_UID=0`, `SUDO_USER=terra`.
+The TOS 6 platform behaviours this bootstrap depends on are recorded as standalone
+ADRs and referenced here rather than restated:
 
-Consequence: Ansible's default `become_user: root` runs `sudo -u root` and
-*drops* privileges (uid 0 → 9999), surfacing as confusing failures — apt cannot
-create `/var/lib/apt/lists/partial`, tar cannot read the root-only cron spool.
-
-Decision: **never assume `become_user: root` on TOS 6.** `group_vars/terra/vars.yml`
-pins `ansible_become: false` and `ansible_become_user: "terra"`; privileged
-Layer-1 tasks (nixos_image_load, nixos_container + handler, nixos_edge_sync,
-verify-nikolaigogol) set
-`become_user: "{{ ansible_become_user | default('root') }}"` explicitly, so any
-forced escalation targets the uid-0 account and not TOS's unprivileged `root`.
-
-Enforcement: the shared read-only preflight
-`tasks/preflight_privilege_model.yml` asserts `ansible_facts['user_uid'] == 0`
-and is imported from `pre_tasks` with `tags: [always]` in both
-`HomeServer__HomeAssistant.yml` and `deploy-nikolaigogol.yml`. It fails fast with
-guidance rather than surfacing later as apt/tar errors.
-
-### 8a. OS detection on TOS 6 — gate on `pkg_mgr`, not `os_family`
-
-Confirmed on the live device (verbose `gather_facts`,
-`logs/20261006T212942-access_ssh.log`): TOS 6 reports
-`ansible_distribution: OtherLinux`, `ansible_distribution_release: NA`,
-`ansible_distribution_version: NA`, `ansible_distribution_major_version: NA`,
-`ansible_os_family: OtherLinux`, and `ansible_pkg_mgr: apt`. TOS 6 is
-Ubuntu-22.04-compatible but does **not** identify as Debian/Ubuntu.
-
-Consequence: any `os_family == 'Debian'` (or `distribution*`-based) gate
-silently skips on TOS even though apt is present — the same failure class as
-Decision 8.
-
-Decision: package-management decisions **must** key on
-`ansible_facts['pkg_mgr'] == 'apt'` (`!=` for the non-apt path), never on
-`os_family == 'Debian'`. The `bootstrap_base` var lookup selects
-`vars/apt-family.yml` via the `{{ ansible_facts['pkg_mgr'] }}-family.yml`
-candidate (renamed from `Debian-family.yml`), with `default.yml` as the
-last-resort fallback. This applies to `bootstrap_base`, `access_sftp`,
-`nixos_image_sync`, and `bootstrap_docker`, and is guarded repo-wide by
-`test_roles_gate_package_management_on_pkg_mgr_not_os_family`.
-
-Docker's `jammy` apt suite is unaffected: it remains the correct Docker CE
-suite for TOS 6's Ubuntu-22.04 compatibility; only the install gate is keyed on
-`pkg_mgr`.
-
-### 8b. Default Ubuntu mirrors are not assumed reachable — opt-in, Ubuntu-scoped apt mirror
-
-The NAS network blocks the default Ubuntu mirrors (`archive.ubuntu.com` /
-`security.ubuntu.com`). With untouched `/etc/apt` sources, `bootstrap_base`'s
-package install hangs on connect: the `apt` module shells out to `apt-get update`
-/ `apt-get -y install`, which never returns. Confirmed on the live device —
-`logs/20261009T233042-base.log` ends at the "Install base packages (apt)" task.
-
-Decision: `bootstrap_base` **must not assume the default Ubuntu mirrors are
-reachable.** It runs an **off-by-default** pre-step
-(`roles/bootstrap_base/tasks/apt_mirror.yml`, imported before
-`variables.yml`/`dependencies.yml`). When `bootstrap_base_apt_mirror_enabled` is
-true it:
-
-1. asserts a suite and a non-empty candidate list are configured;
-2. probes `<base>/dists/<suite>/Release` for each candidate (`status_code: 200`,
-   `validate_certs: false` — a reachability probe only, since `ca-certificates`
-   may not be installed yet);
-3. selects the first candidate answering 200, and fails with guidance if none do;
-4. rewrites **only Ubuntu hostnames**
-   (`https?://(archive|security|ports)\.ubuntu\.com/ubuntu`) in the `/etc/apt`
-   source files, with `backup: true`.
-
-The suite is explicit (`jammy`) because TOS 6 reports
-`distribution_release: NA` (Decision 8a), so it cannot be derived from facts.
-Non-Ubuntu sources — TOS's own repo, Docker's — are deliberately out of scope, so
-the change cannot disturb the appliance's own package feeds. `@terra` enables the
-feature in `group_vars/terra/vars.yml`; every other host keeps the role default
-(`false`).
-
-Consequences: the opt-in default keeps the role deterministic for hosts whose
-default mirrors work, and the Ubuntu-hostname scope plus per-file backups bound
-the blast radius. **Residual risk / fallback:** if `apt-get` still stalls once a
-reachable mirror has been selected, the TOS `apt`/`apt-get` wrapper
-(`/etc/tos/scripts/apt*`) is intercepting the call and stdin would have to be fed
-`yes`; that is not implemented.
+- [ADR 0003 — TOS 6 privilege model](./0003-Tos6PrivilegeModel.md) — the SSH
+  account is already uid 0; never assume `become_user: root`.
+- [ADR 0004 — OS detection on TOS 6](./0004-Tos6OsDetection.md) — gate package
+  management on `pkg_mgr`, not `os_family`/`distribution`.
+- [ADR 0005 — apt mirror repoint](./0005-AptMirrorRepoint.md) — default Ubuntu
+  mirrors are not assumed reachable; opt-in, Ubuntu-scoped mirror.
 
 ## Consequences
 
@@ -210,15 +133,15 @@ reachable mirror has been selected, the TOS `apt`/`apt-get` wrapper
 - TOS is not a general-purpose distro: OS detection is now confirmed — TOS 6
   reports `ansible_distribution`/`ansible_os_family` = `OtherLinux`
   (release/version `NA`) while `ansible_pkg_mgr` = `apt`; package gates key on
-  `pkg_mgr`, never on `os_family == 'Debian'` (see Decision 8a). Docker's install
+  `pkg_mgr`, never on `os_family == 'Debian'` (see ADR 0004). Docker's install
   path on the NAS still remains to be confirmed on the first live run. `become`
-  behaviour is likewise confirmed — see Decision 8 (the SSH account is already
+  behaviour is likewise confirmed — see ADR 0003 (the SSH account is already
   uid 0; escalate only to it, never to TOS's uid-9999 `root`).
 - The Ubuntu-`jammy` Docker fallback assumes TOS 6 keeps its Ubuntu-22.04
   compatibility; `manual` mode is the escape hatch. This is a repository-suite
-  choice, not OS detection — the install gate is `pkg_mgr`-based (Decision 8a).
+  choice, not OS detection — the install gate is `pkg_mgr`-based (ADR 0004).
 - A blocked default Ubuntu mirror is handled by an opt-in,
-  Ubuntu-hostname-scoped apt-source rewrite (Decision 8b), backed up per file.
+  Ubuntu-hostname-scoped apt-source rewrite (ADR 0005), backed up per file.
   Untested residual risk: TOS's own apt wrapper can still intercept `apt-get`
   even against a reachable mirror.
 - Nix sandboxing may be restricted by the NAS kernel.
@@ -241,6 +164,9 @@ reachable mirror has been selected, the TOS `apt`/`apt-get` wrapper
 ## References
 
 - [`0002-ContentAddressableImageTag.md`](./0002-ContentAddressableImageTag.md) — cross-repo content-addressable tag contract
+- [`0003-Tos6PrivilegeModel.md`](./0003-Tos6PrivilegeModel.md) — TOS 6 privilege model (refines §8)
+- [`0004-Tos6OsDetection.md`](./0004-Tos6OsDetection.md) — TOS 6 OS detection (refines §8)
+- [`0005-AptMirrorRepoint.md`](./0005-AptMirrorRepoint.md) — apt mirror repoint (refines §8)
 - [`../Deploy#NixContainer.puml`](../Deploy#NixContainer.puml) — system diagram
 - [`../HomeServer__HomeAssistant_plan.md`](../HomeServer__HomeAssistant_plan.md)
 - `danielrolls/nix-install` — Ansible role installing multi-user Nix

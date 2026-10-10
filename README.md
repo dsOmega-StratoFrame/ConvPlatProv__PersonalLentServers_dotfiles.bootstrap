@@ -51,7 +51,8 @@ The playbook runs these roles in order:
    before installing (`bootstrap_base_apt_mirror_enabled`, off by default);
    `@terra` enables it because its network blocks the default Ubuntu mirrors and
    apt otherwise hangs on connect. Only Ubuntu hostnames are rewritten, with a
-   timestamped backup of each edited source file.
+   timestamped backup of each edited source file (see
+   [`docs/adr/0005-AptMirrorRepoint.md`](./docs/adr/0005-AptMirrorRepoint.md)).
 5. **`bootstrap_nix`** — installs the Nix package manager (multi-user, systemd)
    via the pinned `danielrolls.nix` role and enables `nix-command` + `flakes`.
 6. **`bootstrap_docker`** — detects the Docker shipped with TOS 6 and only
@@ -74,13 +75,14 @@ Before the first run, on the NAS:
   sudo-escalates to `root` (doing so would *drop* privileges and break apt).
   A read-only preflight (`tasks/preflight_privilege_model.yml`, imported from
   `pre_tasks` with `tags: [always]`) asserts the connection is uid 0 and fails
-  fast with guidance if the model ever regresses.
+  fast with guidance if the model ever regresses (see
+  [`docs/adr/0003-Tos6PrivilegeModel.md`](./docs/adr/0003-Tos6PrivilegeModel.md)).
 - **OS detection:** TOS 6 reports `ansible_distribution` / `ansible_os_family`
   as `OtherLinux` (release/version `NA`) while `ansible_pkg_mgr` is `apt`.
   Package decisions therefore key on `pkg_mgr`, never on `os_family == 'Debian'`
   (or any `distribution*` fact), which would silently skip on TOS. See
-  [`docs/adr/0001-HomeServer__HomeAssistant.md`](./docs/adr/0001-HomeServer__HomeAssistant.md)
-  (Decision 8a). The Docker CE `jammy` repo selection is unaffected.
+  [`docs/adr/0004-Tos6OsDetection.md`](./docs/adr/0004-Tos6OsDetection.md).
+  The Docker CE `jammy` repo selection is unaffected.
 - Security Isolation Mode is **off** — it disables SSH.
 
 ### Configure

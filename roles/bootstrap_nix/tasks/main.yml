@@ -7,17 +7,85 @@
   changed_when: false
   failed_when: false
 
+# `default(omit, true)` cannot drop a key from `include_role: vars`: Ansible
+# only strips the `omit` placeholder from *module arguments*, so inside a role
+# var it rendered to an empty string instead. That overrode danielrolls.nix's
+# own default and produced the URL
+#   https://releases.nixos.org/nix/nix-/nix--x86_64-linux.tar.xz   (HTTP 404).
+# Inject the optional overrides as host facts (higher precedence than role
+# defaults) only when they are actually configured; otherwise the pinned role's
+# defaults (`nix_version`, `installer_checksum`) apply. `config` is gated the
+# same way so an empty `bootstrap_nix_extra_config` no longer adds an empty
+# managed block to /etc/nix/nix.conf.
+- name: Pin the Nix version when configured
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    nix_version: "{{ bootstrap_nix_version }}"
+  when: bootstrap_nix_version | default('', true) | length > 0
+
+- name: Pin the Nix installer checksum when configured
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    installer_checksum: "{{ bootstrap_nix_installer_checksum }}"
+  when: bootstrap_nix_installer_checksum | default('', true) | length > 0
+
+- name: Add extra Nix config when configured
+  ansible.builtin.set_fact:  # noqa: var-naming[no-role-prefix]
+    config: "{{ bootstrap_nix_config }}"
+  when: bootstrap_nix_extra_config | default({}, true) | length > 0
+
+# TOS 6 ships its own Go-based `install` at /usr/sbin/install (and /sbin/install),
+# which precedes GNU coreutils' /usr/bin/install in PATH. The Nix installer
+# creates its directory structure with `install -dv -m 0755 ...` and places
+# /etc/nix/nix.conf with `install -m 0644 ...`; against TOS's `install` it dies
+# with "flag provided but not defined: -dv". Prepend a shim directory that
+# resolves `install` to GNU coreutils for the install run. `include_role` does
+# not accept `environment`, hence the wrapping block; the block's environment is
+# inherited by the included role's tasks, and Ansible applies it inside the
+# module process so it survives danielrolls.nix's task-level `become: true`.
 - name: Install Nix (multi-user, systemd)
-  ansible.builtin.include_role:
-    name: danielrolls.nix
-  vars:
-    nix_version: "{{ bootstrap_nix_version | default(omit, true) }}"
-    installer_checksum: "{{ bootstrap_nix_installer_checksum | default(omit, true) }}"
-    flakes: "{{ bootstrap_nix_flakes }}"
-    remove_nix_directory: "{{ bootstrap_nix_remove_nix_directory }}"
-    config: "{{ bootstrap_nix_config | default(omit, true) }}"
-    nix_commands: "{{ bootstrap_nix_commands }}"
   when: bootstrap_nix_command.rc != 0 or bootstrap_nix_force_reinstall
+  environment:
+    PATH: "{{ bootstrap_nix_install_shim_dir }}:{{ ansible_facts['env']['PATH'] | default('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin') }}"
+  block:
+    - name: Check for a GNU coreutils install
+      ansible.builtin.command: "{{ bootstrap_nix_gnu_install_path }} --version"
+      register: bootstrap_nix_gnu_install
+      changed_when: false
+      failed_when: false
+
+    - name: Fail early when GNU install is unavailable
+      ansible.builtin.assert:
+        that:
+          - bootstrap_nix_gnu_install.rc == 0
+          - "'GNU coreutils' in bootstrap_nix_gnu_install.stdout"
+        fail_msg: >-
+          GNU coreutils `install` was not found at
+          {{ bootstrap_nix_gnu_install_path }} (rc
+          {{ bootstrap_nix_gnu_install.rc }}). TOS's Go-based app-installer at
+          /usr/sbin/install shadows it in PATH and the Nix installer cannot
+          create its directory structure with it.
+        success_msg: "GNU install available at {{ bootstrap_nix_gnu_install_path }}."
+        quiet: true
+
+    - name: Create the GNU install shim directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_nix_install_shim_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Resolve `install` to GNU coreutils for the Nix installer
+      ansible.builtin.file:
+        src: "{{ bootstrap_nix_gnu_install_path }}"
+        dest: "{{ bootstrap_nix_install_shim_dir }}/install"
+        state: link
+        force: true
+
+    - name: Install Nix via the pinned role
+      ansible.builtin.include_role:
+        name: danielrolls.nix
+      vars:
+        flakes: "{{ bootstrap_nix_flakes }}"
+        remove_nix_directory: "{{ bootstrap_nix_remove_nix_directory }}"
+        nix_commands: "{{ bootstrap_nix_commands }}"
 
 - name: Ensure /etc/nix/nix.conf exists
   ansible.builtin.copy:

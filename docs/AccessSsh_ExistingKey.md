@@ -29,7 +29,7 @@ role then only **verifies** that key login works.
 escalation**: on TOS 6 `terra` is already uid 0 and the play runs with
 `ansible_become: false` / `ansible_become_user: "terra"` (see
 [`HomeServer__HomeAssistant_plan.md`](./HomeServer__HomeAssistant_plan.md) §3, assumption 4
-and [`adr/0001-HomeServer__HomeAssistant.md`](./adr/0001-HomeServer__HomeAssistant.md) §8).
+and [`adr/0003-Tos6PrivilegeModel.md`](./adr/0003-Tos6PrivilegeModel.md)).
 It feeds `ansible_become_password` for the keyless first-contact flow and for a
 forced-`become` task, not for ordinary sudo. A key replaces the SSH password,
 never the vault entry.

@@ -1,8 +1,23 @@
 ---
 # Bootstraps the Nix package manager (multi-user, systemd) via the
 # danielrolls.nix role and applies HomeServer-specific /etc/nix/nix.conf.
+#
+# Leave `bootstrap_nix_version` empty to use the version the pinned galaxy role
+# was tested with; set it to pin a different one. The installer checksum must be
+# updated together with the version (the role's own default only matches its
+# default version). These are injected as gated facts in tasks/main.yml because
+# `default(omit)` does not work inside `include_role: vars` — see the comment
+# there and tests/unit/test_nix_step.py.
 bootstrap_nix_version: ""
 bootstrap_nix_installer_checksum: ""
+# TOS 6 ships a Go-based app-installer at /usr/sbin/install (and /sbin/install)
+# that precedes GNU coreutils' /usr/bin/install in PATH. The pinned Nix installer
+# creates its directory structure with `install -dv -m 0755 ...` and places
+# /etc/nix/nix.conf with `install -m 0644 ...`; against TOS's `install` it dies
+# with "flag provided but not defined: -dv". For the install run we prepend a
+# shim directory that resolves `install` to the GNU coreutils binary.
+bootstrap_nix_gnu_install_path: "/usr/bin/install"
+bootstrap_nix_install_shim_dir: "/usr/local/lib/nix-bootstrap/bin"
 bootstrap_nix_force_reinstall: false
 bootstrap_nix_flakes: true
 bootstrap_nix_remove_nix_directory: false

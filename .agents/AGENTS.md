@@ -15,7 +15,8 @@ files themselves — they change.
 - `roles/<role>/defaults/main.yml` — the tunable variables for that feature.
 - `group_vars/<host>/vars.yml` — the values chosen for a host.
 - `docs/HomeServer__HomeAssistant_plan.md`, `docs/adr/0001-*.md` — the rollout
-  plan and the Ansible-side architecture; `docs/Deploy#NixContainer.puml` — the
+  plan and the Ansible-side architecture; the TOS 6 platform decisions live in
+  `docs/adr/0003-*.md`–`0005-*.md`; `docs/Deploy#NixContainer.puml` — the
   system diagram.
 - `tests/README.md` — the four testing layers and how to run them.
 - `Makefile` — the operator entrypoints; targets are added/changed over time.
@@ -79,7 +80,8 @@ Other placements:
   package-manager fact (`ansible_facts['pkg_mgr']`, e.g. `apt`), **never** on
   `os_family`/`ansible_distribution` — TOS 6 reports `os_family: OtherLinux`
   while being apt-based, so a Debian gate would silently skip. Include vars keyed
-  by that fact, with a `default.yml` fallback; see ADR 0001 Decision 8a.
+  by that fact, with a `default.yml` fallback; see ADR 0004 — TOS 6 OS
+  detection.
 - **Validate inputs early** with `fail` instead of letting a later task fail
   obscurely.
 - Start YAML files with `---`; give tasks descriptive names.

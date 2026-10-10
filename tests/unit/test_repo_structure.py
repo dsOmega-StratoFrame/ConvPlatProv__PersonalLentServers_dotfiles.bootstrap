@@ -322,6 +322,34 @@ def test_no_secrets_committed():
     assert not suspicious, f"possible key material committed: {suspicious}"
 
 
+ROLE_INCLUDE_KEYS = (
+    "include_role",
+    "import_role",
+    "ansible.builtin.include_role",
+    "ansible.builtin.import_role",
+)
+
+
+def test_omit_is_not_used_in_role_include_vars():
+    """`omit` only drops a key from *module arguments*; in `include_role` /
+    `import_role` `vars` the placeholder renders to an empty string instead,
+    silently overriding the target role's default. bootstrap_nix hit this: an
+    empty `nix_version` produced the 404 installer URL `nix-/nix--x86_64-linux`."""
+    offenders = []
+    for path in sorted(ROLES_DIR.rglob("*.yml")):
+        for task in _iter_tasks(load(path)):
+            for key in ROLE_INCLUDE_KEYS:
+                if key not in task:
+                    continue
+                for name, value in (task.get("vars") or {}).items():
+                    if "default(omit" in str(value):
+                        offenders.append(f"{path.relative_to(REPO)}: vars.{name}")
+    assert not offenders, (
+        "`default(omit)` does not work in role-include vars (renders empty): "
+        + ", ".join(offenders)
+    )
+
+
 TOP_LEVEL_FACT_RE = re.compile(
     r"\bansible_(os_family|distribution|distribution_major_version|"
     r"distribution_release|pkg_mgr|date_time|architecture|system|hostname|"
