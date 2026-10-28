@@ -224,11 +224,20 @@ slice. `invoke` is provided by the dev shell, and real deploys require it
 
 Roles, in order, by tag:
 
-- `image` — `nixos_image_artifact` (locate + checksum the artifact on the
-  control node; derive the tag via the shared command) → `nixos_image_sync`
-  (rsync `--checksum` to
-  `/var/tmp/nixos-images/<sha256>.tar.xz`) → `nixos_image_load` (`docker import`
-  gated on `docker image inspect`).
+- `storage` — the zterra namespace (TOS-ZTERRA-002 / `@terra__ConfigsLocation_
+  strategy`): `zterra_mount` (mount the NVMe btrfs at `/zterra`) →
+  `zterra_layout` (the `local-/ shared-/ var-` tree + noCoW subvolumes, with
+  free-space / root-mount guards) → `zterra_binds` (`/nix`, `/tmp`; D-LOG —
+  `/var/log` is a TOS symlink to `/tmp/log`, so logs ride the `/tmp` bind) →
+  `zterra_docker_data` (Docker's `data-root` **and** containerd's image-store
+  root on zterra; Docker Engine 29+ keeps images/snapshots in containerd, which
+  `data-root` does not relocate).
+- `image` — `zterra_mount` → `zterra_layout` → `zterra_docker_data` →
+  `nixos_image_artifact` (locate +
+  checksum the artifact on the control node; derive the tag via the shared
+  command) → `nixos_image_sync` (rsync `--checksum` to
+  `{{ zterra_root }}/local-/var-/cache/nixos-images/<sha256>.tar.xz`) →
+  `nixos_image_load` (`docker import` gated on `docker image inspect`).
 - `container` — `nixos_container` (render `docker-compose-system.yml` + `.env`
   from `group_vars/nikolaigogol/vars.yml`, ensure the mount sources, `docker
   compose up -d`; a handler recreates the container when the config changes).
@@ -241,8 +250,12 @@ Roles, in order, by tag:
   → `result-NikolaiGogol/tarball/nixos-system-x86_64-linux.tar.xz`.
 - `rsync` on `@terra` (the role can install it via apt with
   `nixos_image_sync_install_rsync=true`, otherwise it fails early with guidance).
-- Review `group_vars/nikolaigogol/vars.yml` — the mount roots are placeholders
-  until the real TOS volume layout is confirmed.
+- Review `group_vars/terra/vars.yml` — `zterra_root` (`/zterra`) is the NVMe
+  btrfs namespace from the configs-location strategy; the root filesystem is
+  only ~7.5 GiB. Provisioning `zterra` (`mkfs.btrfs`) is an **operator step**
+  (TOS-ZTERRA-002 DP1) — the role only mounts. The `nixos_container` /
+  `nixos_image_sync` roots in `group_vars/nikolaigogol/vars.yml` derive from
+  `zterra_root`.
 
 **Two speeds, both idempotent**
 
@@ -331,6 +344,10 @@ roles/access_sftp/              # restore the sshd SFTP server binary (apt hosts
 roles/bootstrap_base/           # minimal base prerequisites
 roles/bootstrap_nix/            # Nix (multi-user)
 roles/bootstrap_docker/         # Docker detection / install
+roles/zterra_mount/             # mount the NVMe btrfs at /zterra (systemd .mount)
+roles/zterra_layout/            # local-/ shared-/ var- tree + noCoW subvolumes
+roles/zterra_binds/             # bind /nix + /tmp onto zterra (D-LOG: logs ride /tmp)
+roles/zterra_docker_data/       # Docker data-root + containerd image store on zterra
 roles/nixos_image_artifact/     # locate + checksum the image on the control node
 roles/nixos_image_sync/         # rsync the artifact to @terra
 roles/nixos_image_load/         # docker import on @terra
