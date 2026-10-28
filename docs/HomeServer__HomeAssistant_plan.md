@@ -162,7 +162,8 @@ debugging.
   - `image` tag — `nixos_image_artifact` (locate + sha256 + 12-hex content tag
     derived via the shared command `conv-plat-prov.content-tag` on the control
     node; see ADR 0002), `nixos_image_sync` (rsync `--checksum` to
-    `/var/tmp/nixos-images/<sha256>.tar.xz`), `nixos_image_load`
+    `{{ zterra_root }}/local-/var-/cache/nixos-images/<sha256>.tar.xz`),
+    `nixos_image_load`
     (`docker import`, gated on `docker image inspect`).
   - `container` tag — `nixos_container` renders `docker-compose-system.yml` +
     `.env` from `group_vars`, ensures the mount sources (directory mounts are
@@ -272,6 +273,7 @@ layer does not add signal for that step.
 | base (`base`) | `test_base_step.py` | `make it-run TAGS=base` | `make run TAGS=base` | `Makefile.Steps` (via any) |
 | nix (`nix`) | — | `make it-run TAGS=nix` | `make run TAGS=nix` | `Makefile.NixBootstrap` |
 | docker (`docker`) | `test_docker_step.py` | `make it-run TAGS=docker` | `make run TAGS=docker`, `make test` | `Makefile.DockerDeployment` |
+| zterra (`zterra`) | `test_zterra_step.py` | `make it-run TAGS=zterra` | `make run TAGS=zterra` | `Makefile.Zterra` |
 | image (`image`) | `test_nixos_image_step.py` | `make it-run TAGS=image` | `make -f Makefile.NixosImage run` | `Makefile.NixosImage` |
 | container (`container`) | `test_nixos_image_step.py` | `make it-run TAGS=container` | `make -f Makefile.NixosContainer run`, `... verify` | `Makefile.NixosContainer` |
 | edge_sync (`edge_sync`) | structure tests | — (inert by default) | `... run EXTRA_ARGS='-e nixos_edge_sync_enabled=true'` | `Makefile.NixosEdgeSync` |

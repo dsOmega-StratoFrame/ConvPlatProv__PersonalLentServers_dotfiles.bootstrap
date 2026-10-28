@@ -1,0 +1,13 @@
+[Unit]
+Description=zterra NVMe data volume
+After=local-fs-pre.target
+Before=local-fs.target
+
+[Mount]
+What={{ zterra_mount_device }}
+Where={{ zterra_mount_root }}
+Type={{ zterra_mount_fstype }}
+Options={{ zterra_mount_options }}
+
+[Install]
+WantedBy=multi-user.target

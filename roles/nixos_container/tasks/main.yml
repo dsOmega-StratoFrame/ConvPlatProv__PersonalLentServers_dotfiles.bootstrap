@@ -58,8 +58,14 @@
 - name: Fail closed when a file mount source is missing
   ansible.builtin.fail:
     msg: >-
-      Mount source {{ item.item.source }} does not exist. Stage it before
-      deploying this layer (e.g. the @Manilov HAOS image).
+      Mount source {{ item.item.source }} (container target
+      {{ item.item.target }}) does not exist on {{ inventory_hostname }}.
+      Expected provider: {{ item.item.provider | default('an upstream layer') }}.
+      No playbook in this repo stages it yet: place the file at the exact source
+      path, confirm with `ls -l {{ item.item.source }}`, then re-run
+      `make -f Makefile.NixosContainer run` (TAGS=container). Fail-closed is
+      intentional: `docker compose up` would otherwise create a directory at a
+      missing bind source.
   loop: "{{ nixos_container_file_mounts.results }}"
   loop_control:
     label: "{{ item.item.source }}"

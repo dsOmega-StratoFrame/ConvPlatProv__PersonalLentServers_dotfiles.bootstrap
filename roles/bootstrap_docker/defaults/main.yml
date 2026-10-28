@@ -18,6 +18,25 @@ bootstrap_docker_apt_channel: "stable"
 bootstrap_docker_apt_base_url: "https://download.docker.com/linux/ubuntu"
 bootstrap_docker_gpg_url: "{{ bootstrap_docker_apt_base_url }}/gpg"
 bootstrap_docker_gpg_path: "/etc/apt/keyrings/docker.asc"
+# TOS 6 keeps every apt source in /etc/apt/sources.list and ships no
+# sources.list.d; deb822_repository writes there, so the role creates it first.
+bootstrap_docker_apt_sources_dir: "/etc/apt/sources.list.d"
+
+# TOS 6 ships a Go-based app-installer named `install` at /usr/sbin/install and
+# /sbin/install that precedes GNU coreutils' /usr/bin/install in PATH (see
+# ADR 0006). dpkg maintainer scripts — e.g. apparmor's postinst, pulled in by
+# docker-ce — call bare `install`, so apt package configuration dies with
+# "flag provided but not defined: -mode". dpkg passes PATH through to maintainer
+# scripts, so the apt runs prepend a shim directory resolving `install` to GNU.
+bootstrap_docker_gnu_install_path: "/usr/bin/install"
+bootstrap_docker_install_shim_dir: "/usr/local/lib/docker-bootstrap/bin"
+bootstrap_docker_env_path: >-
+  {{
+    ([bootstrap_docker_install_shim_dir]
+      + [ansible_facts['env']['PATH']
+         | default('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')])
+    | join(':')
+  }}
 bootstrap_docker_packages:
   - docker-ce
   - docker-ce-cli

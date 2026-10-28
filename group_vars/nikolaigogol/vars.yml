@@ -37,7 +37,10 @@ nixos_image_artifact_source_dir: "{{ lookup('env', 'HOME') }}/.bookmarks/shared-
 nixos_image_artifact_system_name: "NikolaiGogol"
 
 # --- Transfer (control node -> @terra) ----------------------------------------
-nixos_image_sync_remote_dir: "/var/tmp/nixos-images"
+# Staged in the zterra namespace (TOS-ZTERRA-002 DP4), on the NVMe data volume,
+# not the small root filesystem — the ~1.46 GiB artifact does not fit under
+# /var/tmp (rsync ENOSPC; logs/20261010T180200-image.log).
+nixos_image_sync_remote_dir: "{{ zterra_root }}/local-/var-/cache/nixos-images"
 
 # --- Container identity -------------------------------------------------------
 nixos_container_namespace: "{{ nixos_image_namespace }}"
@@ -56,14 +59,15 @@ nixos_container_docker_binary: "docker"
 nixos_container_become: true
 
 # --- Container files / mounts on @terra ---------------------------------------
-# TODO(confirm-on-first-live-run): the real TOS storage volume layout. These
-# defaults keep everything under one root so the role can create the directory
-# mounts; set them to the actual volume paths before the first live run.
-nixos_container_project_dir: "/var/lib/nikolaigogol"
-nixos_container_data_root: "/var/lib/nikolaigogol/data"
+# Everything lives in the zterra namespace (group_vars/terra: zterra_root=/zterra,
+# TOS-ZTERRA-002 DP4). The root filesystem (md9, ~7.5 GiB) is too small for the
+# container data and the HAOS image; see roles/zterra_* and
+# logs/20261010T180200-image.log.
+nixos_container_project_dir: "{{ zterra_root }}/local-/Projects/nikolaigogol"
+nixos_container_data_root: "{{ zterra_root }}/local-/Projects/nikolaigogol/data"
 nixos_container_unix_dotfiles_dir: "{{ nixos_container_data_root }}/Unix_dotfiles"
 nixos_container_virt_scripts_dir: "{{ nixos_container_data_root }}/Virt_scripts_bootstrap"
-nixos_container_home_assistant_image: "{{ nixos_container_data_root }}/HomeAssistant/haos_ova.qcow2"
+nixos_container_home_assistant_image: "{{ zterra_root }}/shared-/@Manilov/dotfiles-/_configs/HomeAssistant__/haos_ova.qcow2"
 
 # `type: directory` sources are created by the role; `type: file` sources must
 # already exist (the @Manilov layer stages the HAOS image) and fail-closed.
@@ -77,6 +81,7 @@ nixos_container_mounts:
   - source: "{{ nixos_container_home_assistant_image }}"
     target: "/opt/HomeServer__HomeAssistant/haos_ova.qcow2"
     type: file
+    provider: "@Manilov (manilov_home_assistant_image)"
 
 # --- Direct SSH override (debugging / automatic container redeploy) ----------
 # hosts.ini [nikolaigogol] points at this endpoint; the container's sshd is

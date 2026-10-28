@@ -9,7 +9,12 @@ nixos_image_sync_remote_dir: "/var/tmp/nixos-images"
 nixos_image_sync_checksum: true
 nixos_image_sync_compress: false
 nixos_image_sync_delete: false
-nixos_image_sync_dest_port: "{{ ansible_port | default(22) }}"
+# synchronize builds its own ssh command and always passes an explicit port
+# (ansible_port, else ansible-core's DEFAULT_REMOTE_PORT = 22); it never reads
+# the control node's ~/.ssh/config. Leave this empty when @terra's SSH port is
+# declared only there: the role then resolves the effective port with `ssh -G`
+# (see tasks/main.yml). Setting ansible_port (e.g. the integration mock) wins.
+nixos_image_sync_dest_port: "{{ ansible_port | default('') }}"
 nixos_image_sync_rsync_opts: []
 # rsync must exist on both ends. Install it with apt only when asked; otherwise
 # fail early with guidance.

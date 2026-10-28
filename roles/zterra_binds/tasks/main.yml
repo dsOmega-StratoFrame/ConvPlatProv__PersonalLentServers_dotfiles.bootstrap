@@ -1,0 +1,183 @@
+---
+# Bind-mount zterra subtrees over their system-wide targets via systemd .mount
+# units. Fail-closed on a missing source or a symlinked target; idempotent
+# (units are templated, and a handler restarts them only when they change).
+# See ai-pln Planner_system/@terra__ConfigsLocation_strategy (D-TMP, D-LOG).
+
+- name: Validate the zterra bind inputs
+  ansible.builtin.assert:
+    that:
+      - zterra_binds_mounts | length > 0
+      - zterra_binds_mounts | rejectattr('source', 'defined') | list | length == 0
+      - zterra_binds_mounts | rejectattr('target', 'defined') | list | length == 0
+    fail_msg: "Each zterra_binds_mounts entry needs both source and target."
+
+- name: Check the bind sources exist
+  ansible.builtin.stat:
+    path: "{{ item.source }}"
+  register: zterra_binds_sources
+  loop: "{{ zterra_binds_mounts }}"
+  loop_control:
+    label: "{{ item.source }}"
+
+- name: Fail-closed when a bind source is missing
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: >-
+      Bind source {{ item.item.source }} does not exist; zterra_layout must run
+      first.
+  loop: "{{ zterra_binds_sources.results }}"
+  loop_control:
+    label: "{{ item.item.source }}"
+
+# systemd .mount units require a canonical Where=: a symlinked target is
+# rejected ("Mount path ... is not canonical (contains a symlink)") and the
+# mount(2) call fails with ELOOP, leaving an enabled unit that fails on every
+# boot. Fail with guidance instead of writing such a unit (D-LOG: this is why
+# the /var/log bind, a symlink to /tmp/log, was retired).
+- name: Inspect each bind target
+  ansible.builtin.stat:
+    path: "{{ item.target }}"
+    follow: false
+  register: zterra_binds_targets
+  loop: "{{ zterra_binds_mounts }}"
+  loop_control:
+    label: "{{ item.target }}"
+
+- name: Fail-closed on a symlinked bind target
+  ansible.builtin.assert:
+    that:
+      - not (item.stat.islnk | default(false))
+    fail_msg: >-
+      Bind target {{ item.item.target }} is a symlink; systemd .mount units
+      cannot mount over a symlinked path. Bind the canonical target instead, or
+      drop the entry (see D-LOG for /var/log -> /tmp/log).
+  loop: "{{ zterra_binds_targets.results }}"
+  loop_control:
+    label: "{{ item.item.target }}"
+
+- name: Derive each bind unit name
+  ansible.builtin.command: >-
+    systemd-escape -p --suffix=mount {{ item.target }}
+  register: zterra_binds_units
+  loop: "{{ zterra_binds_mounts }}"
+  loop_control:
+    label: "{{ item.target }}"
+  changed_when: false
+
+- name: Install the zterra bind mount units
+  ansible.builtin.template:
+    src: zterra-bind.mount.j2
+    dest: "/etc/systemd/system/{{ item.stdout | trim }}"
+    mode: "0644"
+  loop: "{{ zterra_binds_units.results }}"
+  loop_control:
+    label: "{{ item.item.target }}"
+  vars:
+    zterra_bind: "{{ item.item }}"
+    zterra_bind_unit: "{{ item.stdout | trim }}"
+  register: zterra_binds_installed
+
+- name: Enable the zterra bind mounts
+  ansible.builtin.systemd:
+    name: "{{ item.item.stdout | trim }}"
+    enabled: true
+    daemon_reload: true
+  loop: "{{ zterra_binds_installed.results }}"
+  loop_control:
+    label: "{{ item.item.item.target }}"
+
+# Restart only when this unit's file actually changed (so a converged host is a
+# no-op, and changing one unit never restarts a busy sibling such as /nix).
+- name: Start the non-replace zterra bind mounts
+  ansible.builtin.systemd:
+    name: "{{ item.item.stdout | trim }}"
+    state: "{{ 'restarted' if item.changed else 'started' }}"
+  loop: "{{ zterra_binds_installed.results }}"
+  loop_control:
+    label: "{{ item.item.item.target }}"
+  when: not (item.item.item.replace | default(false))
+
+# A `replace` target is already mounted by another unit (e.g. the vendor tmpfs
+# tmp.mount over /tmp): a `started` no-ops, and a plain `restart` would have to
+# unmount it first, failing with EBUSY (umount exit 32) while it is in use — as
+# /tmp always is. Such units set LazyUnmount=yes (detach, don't block), so
+# restart works; do it only when the live mount source is not this bind's source
+# (so a converged or rebooted host is a no-op).
+#
+# Ansible extracts this module's payload into the system tempdir — the very
+# filesystem being replaced — so the module would lose its own payload and crash
+# on exit ("No start of json char found"). Point the module tempdir off /tmp.
+# `findmnt -o SOURCE` reports a btrfs bind as "<device>[/subvol]", never the bind
+# source path, so comparing it to the source would restart on every run. Compare
+# the resolved identity (device:inode) of the target and its source instead:
+# equal means the target already IS this bind (a plain tmpfs/dir differs).
+- name: Check whether each replaceable target is already bound to its source
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - >-
+        [ "$(stat -c %d:%i {{ item.target }})" = "$(stat -c %d:%i {{ item.source }})" ]
+  register: zterra_binds_bound
+  changed_when: false
+  failed_when: false
+  loop: "{{ zterra_binds_mounts }}"
+  loop_control:
+    index_var: zterra_bind_index
+    label: "{{ item.target }}"
+  when: item.replace | default(false)
+
+- name: Replace a stale mount for the replaceable binds
+  ansible.builtin.systemd:
+    name: "{{ zterra_binds_units.results[zterra_bind_index].stdout | trim }}"
+    state: restarted
+    daemon_reload: true
+  loop: "{{ zterra_binds_bound.results }}"
+  loop_control:
+    index_var: zterra_bind_index
+    label: "{{ item.item.target }}"
+  environment:
+    TMPDIR: "{{ zterra_binds_module_tmpdir }}"
+    TMP: "{{ zterra_binds_module_tmpdir }}"
+    TEMP: "{{ zterra_binds_module_tmpdir }}"
+  when:
+    - not (item.skipped | default(false))
+    - item.rc != 0
+
+# A unit retired from zterra_binds_mounts (e.g. the /var/log bind, D-LOG) stays
+# enabled on the device unless it is torn down; an enabled unit that can no
+# longer start fails on every boot. Remove it, guarded by its presence.
+- name: Check for retired bind units
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}"
+  register: zterra_binds_retired_files
+  loop: "{{ zterra_binds_retired_units }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Stop and disable the retired bind units
+  ansible.builtin.systemd:
+    name: "{{ item.item }}"
+    enabled: false
+    state: stopped
+  loop: "{{ zterra_binds_retired_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+
+- name: Remove the retired bind unit files
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item.item }}"
+    state: absent
+  loop: "{{ zterra_binds_retired_files.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+  notify: Reload systemd after bind retirement
+
+- name: Report the zterra bind mounts
+  ansible.builtin.debug:
+    msg: >-
+      binds: {{ zterra_binds_mounts | map(attribute='target') | list }}

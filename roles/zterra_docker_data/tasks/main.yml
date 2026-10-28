@@ -1,0 +1,149 @@
+---
+# Keep Docker's storage on zterra (TOS-ZTERRA-002 D-ROOT):
+#   - Docker Engine 29+ image/snapshot data lives in containerd, not under
+#     daemon.json `data-root`; relocate containerd's root too.
+#   - Make docker fail closed when the zterra mounts are absent (`nofail`).
+# Inert by default. Storage-root changes restart the daemons inline (not via
+# deferred handlers) so the roots are active before a later `docker import`;
+# a failed play must not skip the restart (logs/20261021T193855-image.log).
+# See ai-pln Planner_system/@terra__ConfigsLocation_strategy.
+
+- name: Report that Docker data-root management is disabled
+  ansible.builtin.debug:
+    msg: "zterra_docker_data_manage is false; leaving Docker's storage roots untouched."
+  when: not zterra_docker_data_manage | bool
+
+- name: Manage the Docker storage roots on zterra
+  when: zterra_docker_data_manage | bool
+  block:
+    - name: Assert the data-root mechanism is supported
+      ansible.builtin.assert:
+        that:
+          - zterra_docker_data_mechanism == 'daemon_json'
+        fail_msg: >-
+          zterra_docker_data_mechanism must be 'daemon_json' (D-ROOT); got
+          {{ zterra_docker_data_mechanism }}.
+
+    - name: Ensure the Docker data-root directory exists
+      ansible.builtin.file:
+        path: "{{ zterra_docker_data_root }}"
+        state: directory
+        mode: "{{ zterra_docker_data_dir_mode }}"
+
+    - name: Ensure the containerd storage root directory exists
+      ansible.builtin.file:
+        path: "{{ zterra_docker_data_containerd_root }}"
+        state: directory
+        mode: "{{ zterra_docker_data_dir_mode }}"
+      when: zterra_docker_data_manage_containerd | bool
+
+    - name: Ensure the Docker systemd drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ zterra_docker_data_docker_dropin | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure the containerd systemd drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ zterra_docker_data_containerd_dropin | dirname }}"
+        state: directory
+        mode: "0755"
+      when: zterra_docker_data_manage_containerd | bool
+
+    - name: Require the zterra mounts before Docker starts
+      ansible.builtin.template:
+        src: docker-zterra-mounts.conf.j2
+        dest: "{{ zterra_docker_data_docker_dropin }}"
+        mode: "0644"
+      register: zterra_docker_data_docker_dropin_result
+
+    - name: Set the containerd storage root on zterra
+      ansible.builtin.template:
+        src: containerd-zterra-root.conf.j2
+        dest: "{{ zterra_docker_data_containerd_dropin }}"
+        mode: "0644"
+      register: zterra_docker_data_containerd_dropin_result
+      when: zterra_docker_data_manage_containerd | bool
+
+    - name: Read the current daemon.json
+      ansible.builtin.slurp:
+        src: "{{ zterra_docker_data_daemon_json }}"
+      register: zterra_docker_data_raw
+      failed_when: false
+
+    - name: Parse the current daemon.json
+      ansible.builtin.set_fact:
+        zterra_docker_data_config: >-
+          {{
+            (zterra_docker_data_raw.content | b64decode | from_json)
+            if (zterra_docker_data_raw.content is defined)
+            else {}
+          }}
+
+    - name: Set the Docker data-root in daemon.json
+      ansible.builtin.copy:
+        content: >-
+          {{
+            zterra_docker_data_config
+            | combine({'data-root': zterra_docker_data_root})
+            | to_nice_json
+          }}
+        dest: "{{ zterra_docker_data_daemon_json }}"
+        mode: "0644"
+      register: zterra_docker_data_daemon_json_result
+
+    # A previous run may have written the drop-in but failed later (e.g. an
+    # ENOSPC during `docker import`), leaving containerd on the old root with no
+    # handler ever run. Compare the active ExecStart, not just the file change.
+    - name: Read the active containerd storage root  # noqa: command-instead-of-module
+      ansible.builtin.command: "systemctl show containerd --property=ExecStart --value"
+      register: zterra_docker_data_containerd_active
+      changed_when: false
+      failed_when: false
+      when: zterra_docker_data_manage_containerd | bool
+
+    - name: Restart containerd when its zterra root is not applied
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+        daemon_reload: true
+      register: zterra_docker_data_containerd_restart
+      when:
+        - zterra_docker_data_manage_containerd | bool
+        - >-
+          (zterra_docker_data_containerd_dropin_result.changed | default(false))
+          or (zterra_docker_data_containerd_root not in zterra_docker_data_containerd_active.stdout)
+
+    - name: Restart docker after a storage-root or mount-order change
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+        daemon_reload: true
+      when: >-
+        (zterra_docker_data_docker_dropin_result.changed | default(false))
+        or (zterra_docker_data_daemon_json_result.changed | default(false))
+        or (zterra_docker_data_containerd_restart.changed | default(false))
+
+    - name: Read the active containerd storage root after the restart  # noqa: command-instead-of-module
+      ansible.builtin.command: "systemctl show containerd --property=ExecStart --value"
+      register: zterra_docker_data_containerd_active_after
+      changed_when: false
+      failed_when: false
+      when: zterra_docker_data_manage_containerd | bool
+
+    - name: Fail when containerd is not using the zterra image store
+      ansible.builtin.assert:
+        that:
+          - zterra_docker_data_containerd_root in zterra_docker_data_containerd_active_after.stdout
+        fail_msg: >-
+          containerd is not using {{ zterra_docker_data_containerd_root }}
+          (ExecStart: {{ zterra_docker_data_containerd_active_after.stdout }}).
+          The drop-in exists but the daemon did not pick it up; check
+          `systemctl status containerd` and the drop-in directory.
+      when: zterra_docker_data_manage_containerd | bool
+
+    - name: Report the Docker storage roots
+      ansible.builtin.debug:
+        msg:
+          - "data-root:       {{ zterra_docker_data_root }}"
+          - "containerd root: {{ zterra_docker_data_containerd_root }}"

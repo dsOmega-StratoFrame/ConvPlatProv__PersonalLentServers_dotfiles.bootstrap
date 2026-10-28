@@ -29,9 +29,11 @@ nixos_container_project_dir_mode: "0750"
 nixos_container_config_mode: "0640"
 
 # --- Mounts -------------------------------------------------------------------
-# Each entry: {source, target, type}. `type` is required:
+# Each entry: {source, target, type, provider}. `type` is required:
 #   directory - the role creates the source directory
 #   file      - the source must already exist (fail-closed)
+# `provider` is optional display text naming the layer that stages a `file`
+# source; it is only used in the failure message.
 nixos_container_mounts: []
 nixos_container_mount_dir_mode: "0755"
 

@@ -2,5 +2,11 @@
 # @Manilov — HomeAssistant OS VM hosted by @NikolaiGogol via libvirt. Not
 # bootstrapped by this Playbook yet; placeholders for the roadmap.
 # See docs/HomeServer__HomeAssistant_plan.md.
+#
+# Paths derive from zterra_root (group_vars/terra) per the configs-location
+# strategy: the HAOS image/config lives under shared-/@Manilov/ in the zterra
+# namespace (TOS-ZTERRA-002 DP4), not on the small root filesystem. A play that
+# targets a @manilov host must therefore also load the @terra zterra values.
 manilov_vm_name: "hass_qemu16"
-manilov_data_dir: "/mnt/data"
+manilov_data_dir: "{{ zterra_root }}/shared-/@Manilov/var-/HomeAssistant__"
+manilov_home_assistant_image: "{{ zterra_root }}/shared-/@Manilov/dotfiles-/_configs/HomeAssistant__/haos_ova.qcow2"

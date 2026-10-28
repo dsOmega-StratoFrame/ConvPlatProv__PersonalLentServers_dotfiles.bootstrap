@@ -1,0 +1,8 @@
+---
+# Restarting a changed bind unit is done inline (see tasks/main.yml) so that
+# changing one unit never restarts a busy sibling such as /nix.
+
+# A retired unit file was deleted; reload so systemd forgets it (D-LOG).
+- name: Reload systemd after bind retirement
+  ansible.builtin.systemd:
+    daemon_reload: true

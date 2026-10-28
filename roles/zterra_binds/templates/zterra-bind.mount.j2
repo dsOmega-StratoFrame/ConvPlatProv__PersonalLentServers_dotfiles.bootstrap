@@ -1,0 +1,20 @@
+[Unit]
+Description=zterra bind {{ zterra_bind.source }} -> {{ zterra_bind.target }}
+After={{ zterra_bind.after | default(zterra_binds_mount_dep) }}
+{% if zterra_bind.before is defined %}
+Before={{ zterra_bind.before }}
+{% endif %}
+
+[Mount]
+What={{ zterra_bind.source }}
+Where={{ zterra_bind.target }}
+Type=none
+Options={{ zterra_bind.options | default(zterra_binds_options) }}
+{% if zterra_bind.lazy_unmount | default(zterra_bind.replace | default(false)) %}
+# A `replace` target is already mounted (e.g. the vendor tmpfs over /tmp) and is
+# busy; a normal unmount fails with EBUSY (umount exit 32). Detach it lazily.
+LazyUnmount=yes
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target

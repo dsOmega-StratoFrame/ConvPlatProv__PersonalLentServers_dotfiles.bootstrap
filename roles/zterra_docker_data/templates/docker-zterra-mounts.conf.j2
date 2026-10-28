@@ -1,0 +1,5 @@
+# Managed by Ansible (roles/zterra_docker_data). zterra.mount is `nofail`, so
+# without this dependency Docker would start against the empty mountpoint on
+# the root filesystem and write its state there. Fail closed instead.
+[Unit]
+RequiresMountsFor={{ zterra_docker_data_root }} {{ zterra_docker_data_containerd_root }}

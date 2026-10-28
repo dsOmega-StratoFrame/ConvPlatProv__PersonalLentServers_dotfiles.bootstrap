@@ -1,0 +1,10 @@
+# Managed by Ansible (roles/zterra_docker_data). Docker Engine 29+ keeps image
+# blobs, snapshots and unpack temp in containerd's own root, which
+# daemon.json `data-root` does not relocate. Keep it on the zterra NVMe so a
+# multi-GB `docker import` cannot fill the 7.5 GiB TOS root filesystem.
+[Unit]
+RequiresMountsFor={{ zterra_docker_data_containerd_root }}
+
+[Service]
+ExecStart=
+ExecStart={{ zterra_docker_data_containerd_binary }} --root {{ zterra_docker_data_containerd_root }}

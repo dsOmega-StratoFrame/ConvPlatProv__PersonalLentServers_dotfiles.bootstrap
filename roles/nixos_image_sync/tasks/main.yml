@@ -16,6 +16,39 @@
   ansible.builtin.set_fact:
     nixos_image_sync_remote_archive: "{{ nixos_image_sync_remote_dir }}/{{ nixos_image_artifact_checksum }}.tar.xz"
 
+# synchronize builds its own ssh command and always passes an explicit port
+# (ansible_port, else ansible-core's DEFAULT_REMOTE_PORT = 22); it cannot read
+# the control node's ~/.ssh/config. When @terra's SSH port is declared only
+# there (no ansible_port in the inventory), resolve the effective port the same
+# way `ssh` does and hand it to synchronize. ansible_port wins when set.
+- name: Resolve the SSH port for the transfer
+  when: nixos_image_sync_dest_port | string | length == 0
+  block:
+    - name: Read the effective SSH configuration for the target
+      # Probe the same hostname the connection uses (ansible_host, else the
+      # inventory name). `delegate_to: localhost` re-scopes the connection vars
+      # so the magic `ansible_host` becomes `localhost`; read the *inventory*
+      # host's value from hostvars instead (same pattern as access_ssh).
+      ansible.builtin.command: >-
+        ssh -G {{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}
+      delegate_to: localhost
+      become: false
+      register: nixos_image_sync_ssh_config
+      changed_when: false
+      failed_when: false
+
+    - name: Publish the SSH port resolved from the control node's SSH config
+      ansible.builtin.set_fact:
+        nixos_image_sync_dest_port: >-
+          {{
+            (nixos_image_sync_ssh_config.stdout_lines
+             | select('match', '^port ')
+             | map('regex_replace', '^port\s+', '')
+             | list | first)
+            | default('22', true)
+            | int
+          }}
+
 # `command` is a shell builtin; ansible.builtin.command does not invoke a shell.
 - name: Detect rsync on @terra
   ansible.builtin.shell: "command -v rsync"  # noqa: command-instead-of-shell

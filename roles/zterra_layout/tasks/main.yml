@@ -1,0 +1,140 @@
+---
+# Create the zterra namespace tree. Read-only discovery + idempotent directory
+# and subvolume creation; never mounts, formats, partitions or deletes.
+# See ai-pln Planner_system/@terra__ConfigsLocation_strategy.
+
+- name: Validate the zterra layout inputs
+  ansible.builtin.assert:
+    that:
+      - zterra_layout_root is string
+      - zterra_layout_root.startswith('/')
+      - zterra_layout_directories | length > 0
+      - (zterra_layout_min_free_bytes | int) >= 0
+    fail_msg: >-
+      zterra_layout_* inputs are invalid: zterra_layout_root must be an absolute
+      path and zterra_layout_directories must not be empty.
+
+# gather_facts runs at play start, before zterra_mount mounts the filesystem, so
+# ansible_facts['mounts'] is stale here and does not yet contain zterra_layout_root
+# — without this refresh the guard resolves the backing mount to "/" and fails.
+- name: Refresh the mount facts after mounting zterra
+  ansible.builtin.setup:
+    gather_subset: mounts
+
+- name: Initialise the backing-mount lookup
+  ansible.builtin.set_fact:
+    zterra_layout_backing_mount: {}
+
+# The backing filesystem is the deepest mount point that is a prefix of the
+# target path; ancestor mounts are pairwise prefix-comparable, so a lexicographic
+# ascending sort puts the longest (deepest) match last.
+- name: Identify the filesystem that backs the zterra root
+  ansible.builtin.set_fact:
+    zterra_layout_backing_mount: "{{ item }}"
+  loop: "{{ ansible_facts['mounts'] | sort(attribute='mount') }}"
+  loop_control:
+    label: "{{ item.mount | default('?') }}"
+  when: >-
+    zterra_layout_root == item.mount
+    or zterra_layout_root.startswith((item.mount | regex_replace('/$', '')) ~ '/')
+
+- name: Fail when no mounted filesystem backs the zterra root
+  ansible.builtin.fail:
+    msg: >-
+      No entry in ansible_facts['mounts'] backs {{ zterra_layout_root }}. Mount
+      zterra first (roles/zterra_mount) — `findmnt -T {{ zterra_layout_root }}`.
+  when: zterra_layout_backing_mount | length == 0
+
+- name: Refuse to lay out zterra on the root filesystem
+  ansible.builtin.fail:
+    msg: >-
+      {{ zterra_layout_root }} resolves to the root filesystem
+      ({{ zterra_layout_backing_mount.mount }}); zterra must be its own NVMe
+      filesystem (TOS-ZTERRA-002 D-MOUNT).
+  when:
+    - zterra_layout_forbid_root_mount | bool
+    - zterra_layout_backing_mount.mount | default('') == '/'
+
+- name: Assert the zterra filesystem has enough free space
+  ansible.builtin.assert:
+    that:
+      - >-
+        (zterra_layout_backing_mount.size_available | int)
+        >= (zterra_layout_min_free_bytes | int)
+    fail_msg: >-
+      {{ zterra_layout_backing_mount.mount }} has
+      {{ zterra_layout_backing_mount.size_available | int }} free bytes, below
+      the required {{ zterra_layout_min_free_bytes | int }}.
+    success_msg: >-
+      {{ zterra_layout_backing_mount.mount }} has
+      {{ zterra_layout_backing_mount.size_available | int }} free bytes
+      (>= {{ zterra_layout_min_free_bytes | int }}).
+    quiet: true
+
+- name: Ensure the zterra namespace directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode | default(zterra_layout_dir_mode) }}"
+  loop: "{{ zterra_layout_directories }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+# noCoW for high-churn data: create the subvolume, then clear the CoW flag
+# before anything is written into it (only on a btrfs backing filesystem).
+- name: Ensure the zterra noCoW subvolumes exist
+  ansible.builtin.command: "btrfs subvolume create {{ item }}"
+  args:
+    creates: "{{ item }}"
+  loop: "{{ zterra_layout_nocow_paths }}"
+  loop_control:
+    label: "{{ item }}"
+  when: zterra_layout_backing_mount.fstype | default('') == 'btrfs'
+
+# `creates:` only tests existence, so a plain directory left by an earlier run
+# (e.g. var-/lib/docker pre-created as a directory) silently skips the subvolume
+# and the path is never a noCoW *subvolume*. Fail-closed with remediation
+# instead of silently accepting it.
+- name: Verify each noCoW path is a btrfs subvolume
+  ansible.builtin.command:
+    argv: ["btrfs", "subvolume", "show", "{{ item }}"]
+  register: zterra_layout_nocow_verify
+  changed_when: false
+  failed_when: false
+  loop: "{{ zterra_layout_nocow_paths }}"
+  loop_control:
+    label: "{{ item }}"
+  when: zterra_layout_backing_mount.fstype | default('') == 'btrfs'
+
+- name: Fail when a noCoW path is not a btrfs subvolume
+  ansible.builtin.fail:
+    msg: >-
+      {{ item.item }} exists but is not a btrfs subvolume (an earlier run
+      created it as a plain directory). If it is empty, remove it with
+      `rmdir {{ item.item }}`; if it holds data, migrate it first. Then re-run.
+  loop: "{{ zterra_layout_nocow_verify.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - zterra_layout_backing_mount.fstype | default('') == 'btrfs'
+    - not (item.skipped | default(false))
+    - item.rc != 0
+
+- name: Disable copy-on-write on the zterra noCoW subvolumes
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "{{ zterra_layout_dir_mode }}"
+    attributes: "+C"
+  loop: "{{ zterra_layout_nocow_paths }}"
+  loop_control:
+    label: "{{ item }}"
+  when: zterra_layout_backing_mount.fstype | default('') == 'btrfs'
+
+- name: Report the zterra layout
+  ansible.builtin.debug:
+    msg:
+      - "root:  {{ zterra_layout_root }}"
+      - "mount: {{ zterra_layout_backing_mount.mount | default('?') }}"
+      - "free:  {{ zterra_layout_backing_mount.size_available | default('?') }} bytes"
+      - "nocow: {{ zterra_layout_nocow_paths }}"

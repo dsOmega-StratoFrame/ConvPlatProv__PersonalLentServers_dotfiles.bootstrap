@@ -43,6 +43,46 @@
           bootstrap_docker_install_method=manual.
       when: ansible_facts['pkg_mgr'] != 'apt'
 
+    # TOS 6 ships its own Go-based `install` at /usr/sbin/install (and
+    # /sbin/install), which precedes GNU coreutils' /usr/bin/install in PATH.
+    # dpkg maintainer scripts — e.g. apparmor's postinst, which docker-ce pulls
+    # in — call bare `install`, so apt package configuration dies with "flag
+    # provided but not defined: -mode". dpkg passes PATH through to maintainer
+    # scripts, so prepend a shim directory that resolves `install` to GNU for
+    # the apt runs (see ADR 0006).
+    - name: Check for a GNU coreutils install
+      ansible.builtin.command: "{{ bootstrap_docker_gnu_install_path }} --version"
+      register: bootstrap_docker_gnu_install
+      changed_when: false
+      failed_when: false
+
+    - name: Fail early when GNU install is unavailable
+      ansible.builtin.assert:
+        that:
+          - bootstrap_docker_gnu_install.rc == 0
+          - "'GNU coreutils' in bootstrap_docker_gnu_install.stdout"
+        fail_msg: >-
+          GNU coreutils `install` was not found at
+          {{ bootstrap_docker_gnu_install_path }} (rc
+          {{ bootstrap_docker_gnu_install.rc }}). TOS's Go-based app-installer at
+          /usr/sbin/install shadows it in PATH and apt maintainer scripts cannot
+          run with it.
+        success_msg: "GNU install available at {{ bootstrap_docker_gnu_install_path }}."
+        quiet: true
+
+    - name: Create the GNU install shim directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_docker_install_shim_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Resolve `install` to GNU coreutils for apt/dpkg
+      ansible.builtin.file:
+        src: "{{ bootstrap_docker_gnu_install_path }}"
+        dest: "{{ bootstrap_docker_install_shim_dir }}/install"
+        state: link
+        force: true
+
     - name: Ensure apt prerequisites for the Docker repository
       ansible.builtin.apt:
         name:
@@ -53,10 +93,22 @@
           - python3-debian
         state: present
         update_cache: true
+      environment:
+        PATH: "{{ bootstrap_docker_env_path }}"
 
     - name: Ensure the apt keyring directory exists
       ansible.builtin.file:
         path: "{{ bootstrap_docker_gpg_path | dirname }}"
+        state: directory
+        mode: "0755"
+
+    # TOS 6 keeps every apt source in /etc/apt/sources.list and ships no
+    # sources.list.d directory. deb822_repository (below) writes there and
+    # moves the file into place with os.rename, which fails with ENOENT when
+    # the parent is missing.
+    - name: Ensure the apt sources directory exists
+      ansible.builtin.file:
+        path: "{{ bootstrap_docker_apt_sources_dir }}"
         state: directory
         mode: "0755"
 
@@ -92,6 +144,8 @@
         name: "{{ bootstrap_docker_packages }}"
         state: present
         update_cache: true
+      environment:
+        PATH: "{{ bootstrap_docker_env_path }}"
       register: bootstrap_docker_install
 
     - name: Record that this repository installed Docker

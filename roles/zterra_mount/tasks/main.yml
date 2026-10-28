@@ -1,0 +1,92 @@
+---
+# Mount the zterra btrfs filesystem. Read-only checks + an idempotent systemd
+# .mount unit; formatting is an operator step (DP1) and only ever opt-in.
+# See ai-pln Planner_system/@terra__ConfigsLocation_strategy (D-MOUNT).
+
+- name: Validate the zterra mount inputs
+  ansible.builtin.assert:
+    that:
+      - zterra_mount_root is string
+      - zterra_mount_root.startswith('/')
+      - zterra_mount_device | length > 0
+      - not (zterra_mount_device is match('^/dev/sd'))
+    fail_msg: >-
+      zterra_mount_root must be an absolute path and zterra_mount_device a
+      stable device path (by-path/by-uuid/PARTUUID), never a /dev/sdX kernel
+      name. Set them in group_vars/terra/vars.yml (TOS-ZTERRA-002 D-MOUNT).
+
+- name: Derive the systemd mount unit name
+  ansible.builtin.command: >-
+    systemd-escape -p --suffix=mount {{ zterra_mount_root }}
+  register: zterra_mount_escape
+  changed_when: false
+  when: zterra_mount_unit | length == 0
+
+- name: Publish the mount unit name
+  ansible.builtin.set_fact:
+    zterra_mount_unit: "{{ zterra_mount_escape.stdout | trim }}"
+  when: zterra_mount_unit | length == 0
+
+- name: Check the backing device exists
+  ansible.builtin.stat:
+    path: "{{ zterra_mount_device }}"
+  register: zterra_mount_device_stat
+
+- name: Fail when the zterra device is absent
+  ansible.builtin.fail:
+    msg: >-
+      {{ zterra_mount_device }} does not exist. Confirm the NVMe partition
+      (D-MOUNT: by-path pci-0000:01:00.0-nvme-1-part4 / PARTUUID
+      11a3ce66-fb4e-4c35-96e2-0a826c703e04).
+  when: not zterra_mount_device_stat.stat.exists
+
+- name: Read the device filesystem signature
+  ansible.builtin.command: "blkid {{ zterra_mount_device }}"
+  register: zterra_mount_blkid
+  changed_when: false
+  failed_when: false
+
+# DP1: the operator runs mkfs.btrfs. Only ever format a blank device, and only
+# when explicitly enabled; a device that already has a filesystem is untouched.
+- name: Provision the zterra btrfs filesystem (opt-in, blank device only)
+  ansible.builtin.command: "mkfs.btrfs -f {{ zterra_mount_device }}"
+  when:
+    - zterra_mount_provision | bool
+    - zterra_mount_blkid.rc != 0
+  changed_when: true
+
+- name: Fail when the device is unprovisioned and provisioning is disabled
+  ansible.builtin.fail:
+    msg: >-
+      {{ zterra_mount_device }} has no filesystem and zterra_mount_provision is
+      false. Provision it manually first (TOS-ZTERRA-002 DP1):
+      `mkfs.btrfs {{ zterra_mount_device }}`, then re-run.
+  when:
+    - not zterra_mount_provision | bool
+    - zterra_mount_blkid.rc != 0
+
+- name: Ensure the zterra mountpoint exists
+  ansible.builtin.file:
+    path: "{{ zterra_mount_root }}"
+    state: directory
+    mode: "{{ zterra_mount_dir_mode }}"
+
+- name: Install the zterra mount unit
+  ansible.builtin.template:
+    src: zterra.mount.j2
+    dest: "/etc/systemd/system/{{ zterra_mount_unit }}"
+    mode: "0644"
+
+- name: Reload systemd and mount zterra
+  ansible.builtin.systemd:
+    name: "{{ zterra_mount_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Report the zterra mount
+  ansible.builtin.debug:
+    msg:
+      - "root:   {{ zterra_mount_root }}"
+      - "device: {{ zterra_mount_device }}"
+      - "unit:   {{ zterra_mount_unit }}"

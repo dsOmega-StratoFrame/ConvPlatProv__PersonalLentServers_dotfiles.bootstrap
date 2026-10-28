@@ -1,0 +1,21 @@
+---
+# zterra_layout — create the zterra namespace tree and its noCoW subvolumes.
+#
+# The layout vocabulary is the @terra__ConfigsLocation_strategy:
+#   local-/   this node      shared-/   shared across nodes (@<host> nested)
+#   var-/     runtime state
+# noCoW subvolumes are for high-churn data (Nix store, Docker data-root, /tmp).
+#
+# Fail-fast guards (reused from the reviewed storage_layout role): the target
+# must be backed by a mount other than the root filesystem and must have
+# zterra_layout_min_free_bytes available. Additive and idempotent only.
+zterra_layout_root: "/zterra"
+# Directories to create under zterra_layout_root (list of {path, mode?}).
+zterra_layout_directories: []
+# Subvolume paths to create and mark noCoW (chattr +C) when the backing fs is btrfs.
+zterra_layout_nocow_paths: []
+# Minimum free bytes the backing filesystem must have before we lay out data.
+zterra_layout_min_free_bytes: 5368709120
+# Refuse to create the layout on the root filesystem ("/").
+zterra_layout_forbid_root_mount: true
+zterra_layout_dir_mode: "0755"

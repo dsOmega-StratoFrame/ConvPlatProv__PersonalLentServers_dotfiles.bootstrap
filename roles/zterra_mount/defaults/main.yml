@@ -1,0 +1,21 @@
+---
+# zterra_mount — mount the @terra NVMe "zterra" btrfs filesystem at
+# zterra_mount_root via a systemd .mount unit (nofail).
+#
+# Provisioning the filesystem (mkfs.btrfs on the raw partition) is an OPERATOR
+# step, not Ansible (TOS-ZTERRA-002 DP1): this role only mounts. See
+# ai-pln Planner_system/@terra__ConfigsLocation_strategy and D-MOUNT.
+#
+# The device must be a stable path (by-path / by-uuid / PARTUUID), never a
+# kernel name like /dev/sdza4. On @terra there is no /dev/disk/by-id entry for
+# the NVMe, so group_vars supplies the by-path link — switch it to
+# /dev/disk/by-uuid/<uuid> once mkfs.btrfs has produced a filesystem UUID.
+zterra_mount_root: "/zterra"
+zterra_mount_device: ""
+zterra_mount_fstype: "btrfs"
+zterra_mount_options: "nofail"
+# DP1: never format from Ansible by default; mkfs.btrfs is an operator step.
+zterra_mount_provision: false
+# Derived with `systemd-escape -p --suffix=mount` when empty (/zterra -> zterra.mount).
+zterra_mount_unit: ""
+zterra_mount_dir_mode: "0755"

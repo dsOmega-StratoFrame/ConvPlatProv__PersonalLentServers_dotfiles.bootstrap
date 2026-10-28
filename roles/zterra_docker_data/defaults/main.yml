@@ -1,0 +1,37 @@
+---
+# zterra_docker_data — put Docker's storage roots on the zterra tree.
+#
+# TOS-ZTERRA-002 D-ROOT: Docker is apt-installed by Layer-0 (bootstrap_docker),
+# not TOS App Center-managed, so there is no App Center boundary.
+#
+# Docker Engine 29+ enables the containerd image store by default on fresh
+# installs (the NAS runs 29.9.0). `data-root` only moves Docker's own
+# volumes/metadata: image blobs, snapshots and the unpack temp live under
+# containerd's root (/var/lib/containerd by default). Relocating only data-root
+# still lets `docker import` unpack a multi-GB image onto the 7.5 GiB TOS root
+# filesystem (logs/20261021T170951-image.log). This role therefore sets both:
+#   - daemon.json `data-root`   -> {{ zterra_root }}/var-/lib/docker
+#   - containerd.service --root -> {{ zterra_root }}/var-/lib/containerd
+#
+# It also makes docker require the zterra mounts (zterra.mount is `nofail`), so
+# a missing NVMe fails the daemon instead of silently writing to the root fs.
+#
+# Inert unless zterra_docker_data_manage is true, so the role is safe to enable
+# everywhere and only converges where the decision applies.
+#
+# With an empty Docker state (no images/containers) no data migration is needed;
+# if state exists, stopping docker and moving /var/lib/docker and
+# /var/lib/containerd is an operator step (documented in the rollout plan).
+zterra_docker_data_manage: false
+zterra_docker_data_root: "{{ zterra_root | default('/zterra') }}/var-/lib/docker"
+zterra_docker_data_mechanism: "daemon_json"
+zterra_docker_data_daemon_json: "/etc/docker/daemon.json"
+zterra_docker_data_dir_mode: "0755"
+
+# containerd image store (Docker 29+). Set manage_containerd=false only for a
+# Docker that still uses the classic graph driver and does not need the move.
+zterra_docker_data_manage_containerd: true
+zterra_docker_data_containerd_root: "{{ zterra_root | default('/zterra') }}/var-/lib/containerd"
+zterra_docker_data_containerd_binary: "/usr/bin/containerd"
+zterra_docker_data_containerd_dropin: "/etc/systemd/system/containerd.service.d/10-zterra-root.conf"
+zterra_docker_data_docker_dropin: "/etc/systemd/system/docker.service.d/10-zterra-requires-mounts.conf"

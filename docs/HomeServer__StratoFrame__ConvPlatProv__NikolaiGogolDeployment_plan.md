@@ -28,7 +28,7 @@ Layer 1 gets its own playbook, per ADR 0001 §"one playbook per layer": **`deplo
 control node (localhost)          @terra (TOS 6, docker daemon)
 ─────────────────────             ──────────────────────────────
 nixos_image_artifact              nixos_image_sync
-  select tar.xz + sha256            rsync --checksum → /var/tmp/nixos-images/<sha>.tar.xz
+  select tar.xz + sha256            rsync --checksum → {{ zterra_root }}/local-/var-/cache/nixos-images/<sha>.tar.xz
   derive content tag                (shared cmd on localhost)
                                     (idempotent: skip if checksum matches)
                                  nixos_image_load
@@ -68,7 +68,7 @@ No new runtime deps on `@terra` beyond Docker (already bootstrapped). `bootstrap
 
 ### Step 4 — Role `nixos_image_sync` (transfer)
 - **Files:** `roles/nixos_image_sync/{defaults,tasks}/main.yml`.
-- Behaviour: `ansible.posix.synchronize` with `mode: push`, `checksum: true`, `dest_port`/`rsync_opts` for the large file; target `/var/tmp/nixos-images/<sha>.tar.xz`. Idempotent via checksum (rsync skips unchanged). Record remote path + checksum fact for the next role.
+- Behaviour: `ansible.posix.synchronize` with `mode: push`, `checksum: true`, `dest_port`/`rsync_opts` for the large file; target `{{ zterra_root }}/local-/var-/cache/nixos-images/<sha>.tar.xz` (the zterra NVMe namespace; see TOS-ZTERRA-002 / `@terra__ConfigsLocation_strategy`). Idempotent via checksum (rsync skips unchanged). Record remote path + checksum fact for the next role.
 - **Tests:** integration against mock `@terra` (tiny fixture transfers once, second run no change).
 - **Acceptance:** `make it-run TAGS=image` reports `changed` first run, `ok` (no change) second run.
 
@@ -77,6 +77,7 @@ No new runtime deps on `@terra` beyond Docker (already bootstrapped). `bootstrap
 - Behaviour: gate on `docker image inspect <name>:<sha12>`; if absent run `ansible.builtin.command: docker import <tar> <name>:<sha12>` with `become: true` and explicit `changed_when`. TOS 6 privilege model (ADR 0003): `become_user: "{{ ansible_become_user | default('root') }}"` targets the configured uid-0 admin account, never TOS's unprivileged `root` (uid 9999) — defaulting to `root` drops privileges. Rootfs import intentionally omits ENTRYPOINT/STOPSIGNAL — the compose template supplies `command: /init` + `stop_signal: SIGRTMIN+3` (matches `@NikolaiGogol` today).
 - **Tests:** unit (no pure logic → skip); E2E only for the actual import; integration covers the *wiring* via a no-op dry check if the mock daemon is up (documented as best-effort).
 - **Acceptance:** E2E `docker image inspect ds-omega/nikolai-gogol:<sha12>` returns; re-run reports no change.
+- **Caveat:** `docker image inspect` is metadata-only. A `docker import` that fails mid-unpack (e.g. ENOSPC) can still leave the tag behind, so the next run reports “already loaded” (`logs/20261021T170816-image.log`). Use `nixos_image_load_force=true` to re-import a suspect image; the containerd-root relocation removes the common cause.
 
 ### Step 6 — Role `nixos_container` (compose + mounts)
 - **Files:** `roles/nixos_container/{defaults,tasks,handlers,templates}/…` with `templates/docker-compose-system.yml.j2` + `templates/.env.j2`.
@@ -112,17 +113,20 @@ No new runtime deps on `@terra` beyond Docker (already bootstrapped). `bootstrap
 
 ## 4. Affected files / interfaces
 
-**New:** `deploy-nikolaigogol.yml`, `verify-nikolaigogol.yml`, `roles/nixos_image_artifact/**`, `roles/nixos_image_sync/**`, `roles/nixos_image_load/**`, `roles/nixos_container/**` (+`templates/docker-compose-system.yml.j2`, `.env.j2`), `tests/unit/test_nixos_image_step.py`, `tests/integration/fixtures/*`, `Makefile.NixosImage`, `Makefile.NixosContainer`, (optional) `roles/nixos_edge_sync/**`, `Makefile.NixosEdgeSync`.
+**New:** `deploy-nikolaigogol.yml`, `verify-nikolaigogol.yml`, `roles/zterra_mount/**`, `roles/zterra_layout/**`, `roles/zterra_binds/**`, `roles/zterra_docker_data/**` (the zterra NVMe namespace; TOS-ZTERRA-002 / `@terra__ConfigsLocation_strategy`, added after the `/var/tmp` ENOSPC in `logs/20261010T180200-image.log`), `roles/nixos_image_artifact/**`, `roles/nixos_image_sync/**`, `roles/nixos_image_load/**`, `roles/nixos_container/**` (+`templates/docker-compose-system.yml.j2`, `.env.j2`), `tests/unit/test_nixos_image_step.py`, `tests/unit/test_zterra_step.py`, `tests/integration/fixtures/*`, `Makefile.Zterra`, `Makefile.NixosImage`, `Makefile.NixosContainer`, (optional) `roles/nixos_edge_sync/**`, `Makefile.NixosEdgeSync`.
 **Modified:** `requirements.yml` (`ansible.posix`), `group_vars/nikolaigogol/vars.yml`, `hosts.ini` (`[nikolaigogol]` entry), `tests/integration/playbook.yml`, `tests/unit/test_repo_structure.py`, `Makefile` (`help`), `README.md`, `docs/HomeServer__HomeAssistant_plan.md`, `docs/adr/0001-HomeServer__HomeAssistant.md`.
 
 ## 5. Data migration
 
-None (new layer). Content-addressable import is additive; any manual `:latest` images from earlier tinkering are left untouched (document a one-time `docker rmi ds-omega/nikolai-gogol:latest` cleanup as optional). Staging dir `/var/tmp/nixos-images/` accumulates by sha — document a `clean` target (rsync `--delete` on the current tag or a prune note).
+None (new layer). Content-addressable import is additive; any manual `:latest` images from earlier tinkering are left untouched (document a one-time `docker rmi ds-omega/nikolai-gogol:latest` cleanup as optional). Staging dir `{{ zterra_root }}/local-/var-/cache/nixos-images/` accumulates by sha — document a `clean` target (rsync `--delete` on the current tag or a prune note).
+
+**Docker 29 containerd image store (2026-10-21).** `@terra` runs Docker 29.9.0, which enables the containerd image store on fresh installs. `daemon.json data-root` moves Docker's volumes/metadata but **not** image blobs, snapshots or the unpack temp: those live under containerd's own `root` (`/var/lib/containerd`). The first `docker import` therefore filled md9 `/` (7.5 GiB) and failed with ENOSPC even though `data-root` pointed at zterra (`logs/20261021T170951-image.log`). `zterra_docker_data` now also writes a containerd systemd drop-in (`--root {{ zterra_root }}/var-/lib/containerd`) and a docker drop-in with `RequiresMountsFor` for both roots, so a missing `zterra.mount` (it is `nofail`) fails the daemon instead of silently writing to the root fs. One-time operator step on an existing host: remove/re-import any partial image, then start the stack; `/var/lib/containerd` on the root fs can be moved aside once the new root is verified.
 
 ## 6. Testing matrix (repo convention: unit / integration / E2E / manual)
 
 | Step (tag) | Unit | Integration | E2E | Manual |
 |---|---|---|---|---|
+| zterra (`zterra`) | `test_zterra_step.py` | `make it-run TAGS=zterra` | `make -f Makefile.Zterra run` | `Makefile.Zterra` |
 | artifact (`image`) | tag-derivation | stub artifact | real build path | `Makefile.NixosImage` |
 | sync (`image`) | — | tiny fixture, no-change on 2nd run | real rsync | `Makefile.NixosImage` |
 | import (`image`) | — | wiring only (best-effort) | `docker image inspect <tag>` | `Makefile.NixosImage` |
@@ -138,7 +142,7 @@ Debug tasks print `artifact path / sha256 / tag`, rsync result, import image id,
 | Change | Rollback |
 |---|---|
 | New image (bad) | keep prior tag; set `group_vars` image tag back, re-run `TAGS=container` (no re-import needed) |
-| Staged tar | `rm /var/tmp/nixos-images/<sha>.tar.xz` (additive only) |
+| Staged tar | `rm {{ zterra_root }}/local-/var-/cache/nixos-images/<sha>.tar.xz` (additive only) |
 | Compose/config | revert template/`group_vars`, re-run `TAGS=container` (handler recreates) |
 | Whole layer | `docker compose -f <rendered> down` + leave image tags intact |
 

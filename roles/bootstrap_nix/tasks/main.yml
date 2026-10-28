@@ -44,7 +44,7 @@
 - name: Install Nix (multi-user, systemd)
   when: bootstrap_nix_command.rc != 0 or bootstrap_nix_force_reinstall
   environment:
-    PATH: "{{ bootstrap_nix_install_shim_dir }}:{{ ansible_facts['env']['PATH'] | default('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin') }}"
+    PATH: "{{ bootstrap_nix_env_path }}"
   block:
     - name: Check for a GNU coreutils install
       ansible.builtin.command: "{{ bootstrap_nix_gnu_install_path }} --version"
@@ -112,6 +112,8 @@
   ansible.builtin.command: "nix --version"
   register: bootstrap_nix_version_check
   changed_when: false
+  environment:
+    PATH: "{{ bootstrap_nix_env_path }}"
 
 - name: Report the installed Nix version
   ansible.builtin.debug:

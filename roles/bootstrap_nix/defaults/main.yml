@@ -18,6 +18,25 @@ bootstrap_nix_installer_checksum: ""
 # shim directory that resolves `install` to the GNU coreutils binary.
 bootstrap_nix_gnu_install_path: "/usr/bin/install"
 bootstrap_nix_install_shim_dir: "/usr/local/lib/nix-bootstrap/bin"
+# After the installer runs, `nix` lives in the user's Nix profile, but the
+# Ansible session's PATH only picks it up in a *new* login shell (the installer
+# updates /etc/profile.d/nix.sh and the shell rc files). The pinned role's
+# post-install `nix_commands` source nix-daemon.sh, but that script derives PATH
+# from $HOME, which is not reliable in Ansible's non-login shell — so on the
+# first run `nix --version` failed with "command not found" (rc 127) and aborted
+# the play even though the install had succeeded. Put the Nix profile bin
+# directories on PATH explicitly for the install run and the verification.
+bootstrap_nix_profile_bin_dirs:
+  - "/nix/var/nix/profiles/default/bin"
+  - "{{ ansible_facts['user_dir'] | default('/root') }}/.nix-profile/bin"
+  - "{{ ansible_facts['user_dir'] | default('/root') }}/.local/state/nix/profile/bin"
+bootstrap_nix_env_path: >-
+  {{
+    ([bootstrap_nix_install_shim_dir] + bootstrap_nix_profile_bin_dirs
+      + [ansible_facts['env']['PATH']
+         | default('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')])
+    | join(':')
+  }}
 bootstrap_nix_force_reinstall: false
 bootstrap_nix_flakes: true
 bootstrap_nix_remove_nix_directory: false

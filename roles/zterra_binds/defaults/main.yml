@@ -1,0 +1,21 @@
+---
+# zterra_binds — bind-mount zterra subtrees over their system-wide targets
+# (TOS-ZTERRA-002 D-TMP: /tmp is a disk-backed noCoW subvolume over the tmpfs).
+#
+# Each entry: {source, target, after?, before?, options?, replace?, lazy_unmount?}.
+# `replace: true` marks a target already mounted by another unit (e.g. the vendor
+# tmpfs tmp.mount over /tmp): a plain `started` no-ops, so the role restarts the
+# unit when the live mount source differs. Such entries default to
+# LazyUnmount=yes, so stopping a busy target detaches it (umount -l) instead of
+# failing with EBUSY (umount exit 32).
+zterra_binds_mounts: []
+# Units retired from zterra_binds_mounts but still enabled on the device (e.g.
+# the removed /var/log bind, D-LOG); the role stops, disables and deletes them.
+zterra_binds_retired_units: []
+# Ansible extracts a module's payload into the system tempdir (tempfile.mkdtemp
+# -> $TMPDIR, else /tmp). The task that replaces /tmp would then hide its own
+# payload and crash on exit ("No start of json char found"), so point TMPDIR at
+# a filesystem we are NOT swapping (must be an existing directory).
+zterra_binds_module_tmpdir: "/var/tmp"
+zterra_binds_options: "bind,nofail"
+zterra_binds_mount_dep: "zterra.mount"

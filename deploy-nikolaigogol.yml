@@ -8,7 +8,8 @@
 # auto-load group_vars/nikolaigogol; it is pulled in explicitly with vars_files.
 #
 # Tags:
-#   image      artifact -> sync -> load (control node + @terra import)
+#   storage    prepare the zterra namespace (roles/zterra_*)
+#   image      zterra -> artifact -> sync -> load (control node + @terra import)
 #   container  render compose/env, ensure mounts, (re)create the container
 #   edge_sync  optional, inert helper (roles/nixos_edge_sync, off by default)
 #
@@ -24,6 +25,18 @@
       ansible.builtin.import_tasks: tasks/preflight_privilege_model.yml
       tags: [always]
   roles:
+    # Prepare the zterra namespace first so the `image` tag cannot stage the
+    # artifact on the small root filesystem (rsync ENOSPC;
+    # logs/20261010T180200-image.log). zterra_docker_data keeps Docker's
+    # data-root *and* containerd's image store (Docker 29+) off the root fs
+    # (logs/20261021T170951-image.log). Layer 0 normally does this; the roles are
+    # idempotent, so including them here keeps `TAGS=image` self-sufficient.
+    - role: zterra_mount
+      tags: [zterra, storage, image]
+    - role: zterra_layout
+      tags: [zterra, storage, image]
+    - role: zterra_docker_data
+      tags: [zterra, storage, docker, image]
     - role: nixos_image_artifact
       tags: [image]
     - role: nixos_image_sync

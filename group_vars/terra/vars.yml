@@ -84,3 +84,87 @@ bootstrap_nix_trusted_users: "root terra"
 bootstrap_docker_install_method: "detect"
 bootstrap_docker_apt_suite: "jammy"
 bootstrap_docker_user: "terra"
+
+# zterra — NVMe configs/data namespace. TOS-ZTERRA-002 /
+# @terra__ConfigsLocation_strategy: the unused NVMe partition (sdza4, ~921.7 G)
+# is a manually created btrfs filesystem mounted at /zterra (systemd .mount,
+# nofail), and IO-heavy/config data lives in the local-/ shared-/ var- tree
+# there instead of on the ~7.5 GiB md9 root (which caused the image-staging
+# ENOSPC, logs/20261010T180200-image.log). Provisioning (mkfs.btrfs) is an
+# operator step (DP1); the role only mounts.
+zterra_root: "/zterra"
+zterra_local_dir: "{{ zterra_root }}/local-"
+zterra_shared_dir: "{{ zterra_root }}/shared-"
+zterra_var_dir: "{{ zterra_root }}/var-"
+
+# zterra_mount — D-MOUNT: no /dev/disk/by-id link exists for the NVMe, so mount
+# by the filesystem UUID (created by the operator `mkfs.btrfs` on
+# /dev/disk/by-path/pci-0000:01:00.0-nvme-1-part4; PARTUUID
+# 11a3ce66-fb4e-4c35-96e2-0a826c703e04).
+zterra_mount_root: "{{ zterra_root }}"
+zterra_mount_device: "/dev/disk/by-uuid/2eb7404b-103c-4aa1-bfb9-c962badfb9a0"
+zterra_mount_fstype: "btrfs"
+zterra_mount_options: "nofail"
+zterra_mount_provision: false # DP1: operator mkfs.btrfs, role mounts only
+
+# zterra_layout — the namespace tree + noCoW subvolumes for high-churn data.
+zterra_layout_root: "{{ zterra_root }}"
+zterra_layout_min_free_bytes: 5368709120
+zterra_layout_forbid_root_mount: true
+zterra_layout_nocow_paths:
+  - "{{ zterra_root }}/local-/nix"
+  - "{{ zterra_root }}/local-/var-/tmp"
+  - "{{ zterra_root }}/var-/lib/docker"
+  # Docker Engine 29+ image/snapshot store (containerd), not moved by data-root.
+  - "{{ zterra_root }}/var-/lib/containerd"
+zterra_layout_directories:
+  - path: "{{ zterra_root }}/local-"
+  - path: "{{ zterra_root }}/local-/dotfiles-/_configs"
+  - path: "{{ zterra_root }}/local-/dotfiles-/_scripts"
+  - path: "{{ zterra_root }}/local-/Projects"
+  - path: "{{ zterra_root }}/local-/var-/cache"
+  # Reserved, unbound: /var/log is a TOS symlink to /tmp/log, so logs ride the
+  # /tmp bind instead of a dedicated /var/log bind (D-LOG).
+  - path: "{{ zterra_root }}/local-/var-/log"
+  - path: "{{ zterra_root }}/local-/var-/share"
+  - path: "{{ zterra_root }}/local-/var-/state"
+  - path: "{{ zterra_root }}/shared-"
+  - path: "{{ zterra_root }}/shared-/dotfiles-/_configs"
+  - path: "{{ zterra_root }}/shared-/@Manilov/dotfiles-/_configs/HomeAssistant__"
+  - path: "{{ zterra_root }}/shared-/@Manilov/etc-/HomeAssistant__"
+  - path: "{{ zterra_root }}/shared-/@Manilov/var-/HomeAssistant__/addons_data"
+  - path: "{{ zterra_root }}/shared-/@Manilov/var-/HomeAssistant__/ssl"
+  - path: "{{ zterra_root }}/shared-/@Manilov/var-/HomeAssistant__/backup"
+  - path: "{{ zterra_root }}/shared-/@Manilov/var-/HomeAssistant__/share"
+  - path: "{{ zterra_root }}/var-"
+  - path: "{{ zterra_root }}/var-/lib"
+  # var-/lib/docker is intentionally NOT pre-created here: it must be a btrfs
+  # subvolume (zterra_layout_nocow_paths), and pre-creating it as a plain
+  # directory makes `btrfs subvolume create` skip it.
+
+# zterra_binds — bind the zterra subtrees over their system-wide targets.
+# /tmp overrides the active tmpfs tmp.mount (D-TMP); `replace` restarts it.
+# D-LOG: /var/log is NOT bound. On TOS it is a symlink to /tmp/log (logs live
+# inside the temp layer) and systemd .mount units cannot mount over a symlinked
+# path; logs therefore ride the /tmp bind onto zterra (local-/var-/tmp/log).
+# local-/var-/log is a reserved (unbound) namespace leaf.
+zterra_binds_mounts:
+  - source: "{{ zterra_root }}/local-/nix"
+    target: "/nix"
+    before: "nix-daemon.service"
+  - source: "{{ zterra_root }}/local-/var-/tmp"
+    target: "/tmp"
+    replace: true
+# D-LOG: tear down the stale, enabled /var/log unit left failing by an earlier
+# run (the role removes units it no longer configures).
+zterra_binds_retired_units:
+  - "var-log.mount"
+
+# zterra_docker_data — D-ROOT: Docker is apt-installed by Layer-0, not App
+# Center-managed, so set data-root in daemon.json and restart the daemon.
+# Docker 29+ stores images/snapshots in containerd, whose root is independent
+# of data-root; both are moved to zterra (logs/20261021T170951-image.log).
+zterra_docker_data_manage: true
+zterra_docker_data_root: "{{ zterra_root }}/var-/lib/docker"
+zterra_docker_data_containerd_root: "{{ zterra_root }}/var-/lib/containerd"
+zterra_docker_data_mechanism: "daemon_json"
