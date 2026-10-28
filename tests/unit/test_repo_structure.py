@@ -213,6 +213,9 @@ def test_deploy_nikolaigogol_roles_valid(deploy_play):
 
 def test_deploy_nikolaigogol_role_order(deploy_play):
     assert role_names(deploy_play) == [
+        "zterra_mount",
+        "zterra_layout",
+        "zterra_docker_data",
         "nixos_image_artifact",
         "nixos_image_sync",
         "nixos_image_load",
@@ -223,10 +226,30 @@ def test_deploy_nikolaigogol_role_order(deploy_play):
 
 def test_deploy_nikolaigogol_role_tags(deploy_play):
     tags = role_tags(deploy_play)
+    # The zterra namespace must run under the `image` tag too, so `TAGS=image`
+    # cannot stage the artifact on the small root filesystem again, and Docker's
+    # storage roots are reconciled before the import.
+    for name in ("zterra_mount", "zterra_layout", "zterra_docker_data"):
+        assert "storage" in tags[name]
+        assert "zterra" in tags[name]
+        assert "image" in tags[name]
+    assert "docker" in tags["zterra_docker_data"]
     for name in ("nixos_image_artifact", "nixos_image_sync", "nixos_image_load"):
         assert "image" in tags[name], f"{name}: missing 'image' tag"
     assert "container" in tags["nixos_container"]
     assert "edge_sync" in tags["nixos_edge_sync"]
+
+
+def test_zterra_enabled_in_layer0(play):
+    """Layer 0 prepares the zterra namespace, and backup_tos still runs first."""
+    names = role_names(play)
+    assert names[0] == "backup_tos"
+    for name in ("zterra_mount", "zterra_layout", "zterra_binds", "zterra_docker_data"):
+        assert name in names, f"Layer 0 missing {name}"
+    tags = role_tags(play)
+    assert "zterra" in tags["zterra_mount"]
+    assert "storage" in tags["zterra_layout"]
+    assert "docker" in tags["zterra_docker_data"]
 
 
 def test_roles_are_pinned_to_commits():

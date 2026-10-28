@@ -24,6 +24,20 @@
       # Containers cannot sandbox Nix builds.
       sandbox: false
 
+    # --- zterra namespace (mock) --------------------------------------------
+    # The mock is a single-filesystem container, so zterra_mount is omitted and
+    # zterra_layout runs against /var/tmp/zterra with the guards relaxed
+    # (forbid_root_mount off, free-space floor 0 — the guards themselves are
+    # unit-tested) and noCoW subvolumes disabled (not btrfs here).
+    zterra_root: "/var/tmp/zterra"
+    zterra_layout_root: "{{ zterra_root }}"
+    zterra_layout_min_free_bytes: 0
+    zterra_layout_forbid_root_mount: false
+    zterra_layout_nocow_paths: []
+    zterra_layout_directories:
+      - path: "{{ zterra_root }}/local-/var-/cache"
+      - path: "{{ zterra_root }}/local-/Projects"
+
     # --- Layer 1 (@NikolaiGogol) mock values --------------------------------
     # No group_vars/nikolaigogol here, so the image identity is supplied inline.
     nixos_image_namespace: "ds-omega"
@@ -34,7 +48,7 @@
     nixos_image_tag: "ecfcf1d2a1e3"
     nixos_image_artifact_source_dir: "{{ playbook_dir }}/fixtures"
     nixos_image_artifact_archive_relative: "minimal-rootfs.tar.xz"
-    nixos_image_sync_remote_dir: "/var/tmp/nixos-images"
+    nixos_image_sync_remote_dir: "{{ zterra_root }}/local-/var-/cache/nixos-images"
     nixos_image_load_manage: false
     nixos_container_project_dir: "/var/tmp/nikolaigogol"
     nixos_container_manage_compose: false
@@ -58,6 +72,8 @@
     - role: bootstrap_docker
       tags: [docker]
     # Layer 1 — @NikolaiGogol
+    - role: zterra_layout
+      tags: [zterra, storage, image]
     - role: nixos_image_artifact
       tags: [image]
     - role: nixos_image_sync

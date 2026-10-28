@@ -27,7 +27,21 @@
       tags: [access, ssh]
     - role: bootstrap_base
       tags: [base, prereqs]
+    # zterra namespace (TOS-ZTERRA-002 / @terra__ConfigsLocation_strategy):
+    # mount the NVMe btrfs, lay out the local-/ shared-/ var- tree, and bind
+    # /nix and /tmp onto it *before* Nix and Docker are installed (D-LOG: logs
+    # ride the /tmp bind — /var/log is a TOS symlink to /tmp/log).
+    - role: zterra_mount
+      tags: [zterra, storage]
+    - role: zterra_layout
+      tags: [zterra, storage]
+    - role: zterra_binds
+      tags: [zterra, storage, binds]
     - role: bootstrap_nix
       tags: [nix]
     - role: bootstrap_docker
       tags: [docker]
+    # Docker data-root on zterra (TOS-ZTERRA-002 D-ROOT); restarts the daemon
+    # when daemon.json changes.
+    - role: zterra_docker_data
+      tags: [zterra, storage, docker]

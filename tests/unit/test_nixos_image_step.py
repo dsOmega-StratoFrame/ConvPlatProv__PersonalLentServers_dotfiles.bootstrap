@@ -23,6 +23,7 @@ from jinja2 import Template
 REPO = Path(__file__).resolve().parents[2]
 ARTIFACT_DEFAULTS = REPO / "roles" / "nixos_image_artifact" / "defaults" / "main.yml"
 SYNC_DEFAULTS = REPO / "roles" / "nixos_image_sync" / "defaults" / "main.yml"
+SYNC_TASKS = REPO / "roles" / "nixos_image_sync" / "tasks" / "main.yml"
 LOAD_DEFAULTS = REPO / "roles" / "nixos_image_load" / "defaults" / "main.yml"
 CONTAINER_DEFAULTS = REPO / "roles" / "nixos_container" / "defaults" / "main.yml"
 COMPOSE_TEMPLATE = REPO / "roles" / "nixos_container" / "templates" / "docker-compose-system.yml.j2"
@@ -35,6 +36,21 @@ FIXTURE_ROOTFS_TAG = "ecfcf1d2a1e3"
 
 def load(path: Path) -> dict:
     return yaml.safe_load(path.read_text())
+
+
+def _iter_tasks(tasks: list):
+    for task in tasks:
+        yield task
+        for key in ("block", "rescue", "always"):
+            if key in task:
+                yield from _iter_tasks(task[key])
+
+
+def _find_task(tasks: list, needle: str) -> dict:
+    for task in _iter_tasks(tasks):
+        if needle in (task.get("name") or ""):
+            return task
+    raise AssertionError(f"no task containing {needle!r}")
 
 
 @pytest.fixture(scope="module")
@@ -135,12 +151,73 @@ def test_group_vars_derive_tag_at_runtime():
     assert "nixos_image_artifact_tag" in str(data["nixos_image_tag"])
 
 
+def test_group_vars_derive_paths_from_zterra():
+    """The staging dir and container roots must live in the zterra namespace on
+    the NVMe data volume, not on the small root filesystem (rsync ENOSPC;
+    logs/20261010T180200-image.log; TOS-ZTERRA-002 DP4)."""
+    data = load(NIKOLAIGOGOL_VARS)
+    for key in (
+        "nixos_image_sync_remote_dir",
+        "nixos_container_project_dir",
+        "nixos_container_data_root",
+        "nixos_container_home_assistant_image",
+    ):
+        assert "zterra_root" in data[key], f"{key} must derive from zterra_root"
+    text = NIKOLAIGOGOL_VARS.read_text()
+    assert "/var/lib/nikolaigogol" not in text
+    assert "/var/tmp/nixos-images" not in text
+    assert "storage_layout_root" not in text
+
+
 # --- sync / load defaults -----------------------------------------------------
 
 def test_sync_defaults_use_checksum_and_staging_dir():
     data = load(SYNC_DEFAULTS)
     assert data["nixos_image_sync_checksum"] is True
     assert data["nixos_image_sync_remote_dir"] == "/var/tmp/nixos-images"
+
+
+def test_sync_dest_port_defers_to_ansible_port_by_default():
+    """synchronize always passes an explicit port (ansible_port, else 22) and
+    never reads ~/.ssh/config, so the default must not hardcode 22: it defers to
+    ansible_port and leaves the role to resolve the ssh-config port when unset."""
+    expr = load(SYNC_DEFAULTS)["nixos_image_sync_dest_port"]
+    assert "ansible_port" in expr
+    assert "22" not in expr
+    # Unset ansible_port -> empty (the role resolves it); set -> passthrough.
+    assert Template(expr).render() == ""
+    assert Template(expr).render(ansible_port=2222) == "2222"
+
+
+def test_sync_role_resolves_ssh_config_port():
+    """Regression: @terra's SSH port (9222) lives only in the control node's
+    ~/.ssh/config, which ansible.posix.synchronize cannot read, so it tried port
+    22 and got "Connection refused". The role must resolve the effective port
+    with `ssh -G` on the control node."""
+    tasks = yaml.safe_load(SYNC_TASKS.read_text())
+
+    resolve = _find_task(tasks, "Resolve the SSH port for the transfer")
+    assert "nixos_image_sync_dest_port" in resolve["when"]
+
+    read = _find_task(tasks, "Read the effective SSH configuration for the target")
+    # delegate_to: localhost re-scopes the magic ansible_host to localhost, so
+    # the probe must read the inventory host's value from hostvars (access_ssh
+    # does the same).
+    assert read["ansible.builtin.command"] == (
+        "ssh -G {{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}"
+    )
+    assert read["delegate_to"] == "localhost"
+    assert read["become"] is False
+    assert read["changed_when"] is False
+
+    publish = _find_task(tasks, "Publish the SSH port resolved")
+    assert "nixos_image_sync_dest_port" in publish["ansible.builtin.set_fact"]
+
+    # The transfer must consume the resolved value.
+    transfer = _find_task(tasks, "Transfer the image artifact")
+    assert transfer["ansible.posix.synchronize"]["dest_port"] == (
+        "{{ nixos_image_sync_dest_port }}"
+    )
 
 
 def test_load_is_gated_and_privileged():

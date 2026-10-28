@@ -170,14 +170,43 @@ def test_gnu_install_shim_defaults():
     )
 
 
-def test_install_block_prepends_the_shim_to_path():
+def test_install_block_uses_the_nix_env_path():
     block = _find_block(_tasks(), "Install Nix (multi-user, systemd)")
-    path = block["environment"]["PATH"]
-    assert path.startswith("{{ bootstrap_nix_install_shim_dir }}:"), (
-        "the shim must be first on PATH so it wins over TOS's /usr/sbin/install"
+    assert block["environment"]["PATH"] == "{{ bootstrap_nix_env_path }}"
+
+
+def test_nix_env_path_puts_shim_then_nix_profiles_first():
+    """The shim must win over TOS's /usr/sbin/install, and the Nix profile bin
+    dirs must be present so post-install `nix` resolves without a new login
+    shell."""
+    expr = _defaults()["bootstrap_nix_env_path"]
+    rendered = Template(expr).render(
+        bootstrap_nix_install_shim_dir="/shim",
+        bootstrap_nix_profile_bin_dirs=[
+            "/nix/var/nix/profiles/default/bin",
+            "/home/terra/.nix-profile/bin",
+            "/home/terra/.local/state/nix/profile/bin",
+        ],
+        ansible_facts={"env": {"PATH": "/usr/bin:/bin"}},
     )
-    # Keep the host's existing PATH after the shim.
-    assert "ansible_facts['env']['PATH']" in path
+    assert rendered == (
+        "/shim:/nix/var/nix/profiles/default/bin:/home/terra/.nix-profile/bin:"
+        "/home/terra/.local/state/nix/profile/bin:/usr/bin:/bin"
+    )
+
+
+def test_nix_profile_bin_dirs_cover_the_user_profile():
+    dirs = _defaults()["bootstrap_nix_profile_bin_dirs"]
+    joined = " ".join(dirs)
+    # The successful run resolved nix at <home>/.nix-profile/bin/nix.
+    assert "/nix/var/nix/profiles/default/bin" in dirs
+    assert ".nix-profile/bin" in joined
+    assert "ansible_facts['user_dir']" in joined
+
+
+def test_verify_task_uses_the_nix_env_path():
+    verify = _find_task(_tasks(), "Verify Nix is available")
+    assert verify["environment"]["PATH"] == "{{ bootstrap_nix_env_path }}"
 
 
 def test_install_block_gates_on_a_needed_install():

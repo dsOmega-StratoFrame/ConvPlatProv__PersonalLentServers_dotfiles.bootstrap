@@ -89,3 +89,64 @@ def test_legacy_docker_list_is_removed():
     task = _find_task(tasks, "Remove the legacy Docker apt source")
     assert task["ansible.builtin.file"]["path"] == "/etc/apt/sources.list.d/docker.list"
     assert task["ansible.builtin.file"]["state"] == "absent"
+
+
+def test_gnu_install_shim_defaults(defaults):
+    assert defaults["bootstrap_docker_gnu_install_path"] == "/usr/bin/install"
+    assert (
+        defaults["bootstrap_docker_install_shim_dir"]
+        == "/usr/local/lib/docker-bootstrap/bin"
+    )
+    host_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    rendered = Template(defaults["bootstrap_docker_env_path"]).render(
+        bootstrap_docker_install_shim_dir=defaults["bootstrap_docker_install_shim_dir"],
+        ansible_facts={"env": {"PATH": host_path}},
+    )
+    # The shim must come first so GNU install shadows TOS's Go installer.
+    assert rendered.split(":")[0] == defaults["bootstrap_docker_install_shim_dir"]
+    assert rendered.endswith(host_path)
+
+
+def test_apt_runs_use_the_gnu_install_shim():
+    """Regression: TOS's Go `install` shadows GNU coreutils and breaks dpkg
+    maintainer scripts (apparmor's postinst). The apt runs must prepend the shim
+    so dpkg passes a GNU-first PATH to those scripts."""
+    tasks = yaml.safe_load(TASKS_PATH.read_text())
+    names = [task.get("name", "") for task in _iter_tasks(tasks)]
+    shim_idx = next(
+        i for i, name in enumerate(names) if "Resolve `install` to GNU coreutils" in name
+    )
+    install_idx = next(
+        i for i, name in enumerate(names) if "Install Docker packages" in name
+    )
+    assert shim_idx < install_idx
+
+    shim_dir = _find_task(tasks, "Create the GNU install shim directory")
+    assert shim_dir["ansible.builtin.file"]["state"] == "directory"
+
+    for needle in ("Ensure apt prerequisites", "Install Docker packages"):
+        task = _find_task(tasks, needle)
+        assert task["environment"]["PATH"] == "{{ bootstrap_docker_env_path }}"
+
+
+def test_apt_sources_dir_default(defaults):
+    assert defaults["bootstrap_docker_apt_sources_dir"] == "/etc/apt/sources.list.d"
+
+
+def test_apt_sources_dir_is_created_before_the_repo():
+    """Regression: TOS 6 has no /etc/apt/sources.list.d, so deb822_repository's
+    final os.rename fails with ENOENT unless the role creates the directory
+    first."""
+    tasks = yaml.safe_load(TASKS_PATH.read_text())
+    names = [task.get("name", "") for task in _iter_tasks(tasks)]
+    sources_idx = next(
+        i for i, name in enumerate(names) if "Ensure the apt sources directory" in name
+    )
+    repo_idx = next(
+        i for i, name in enumerate(names) if "Add the Docker apt repository" in name
+    )
+    assert sources_idx < repo_idx
+
+    task = _find_task(tasks, "Ensure the apt sources directory exists")
+    assert task["ansible.builtin.file"]["path"] == "{{ bootstrap_docker_apt_sources_dir }}"
+    assert task["ansible.builtin.file"]["state"] == "directory"

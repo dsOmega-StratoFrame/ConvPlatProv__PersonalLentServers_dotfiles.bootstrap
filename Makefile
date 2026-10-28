@@ -88,7 +88,7 @@ help:
 	@echo "  logs                  every ansible target -> logs/latest.log"
 	@echo "Per-step manual testing: make -f Makefile.<Step> help"
 	@echo "  (Makefile.BackupTos, .AccessSsh, .NixBootstrap, .DockerDeployment,"
-	@echo "   .NixosImage, .NixosContainer, .NixosEdgeSync)"
+	@echo "   .Zterra, .NixosImage, .NixosContainer, .NixosEdgeSync)"
 	@echo "Layer 1 (@NikolaiGogol): make -f Makefile.NixosImage run, then"
 	@echo "  make -f Makefile.NixosContainer run (see README 'Layer 1')."
 
