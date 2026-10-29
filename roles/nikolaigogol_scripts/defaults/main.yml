@@ -1,0 +1,25 @@
+---
+# nikolaigogol_scripts — deploy the upstream @NikolaiGogol Docker/edge scripts
+# onto @terra as-is, into `{{ zterra_root }}/local-/Projects/@NikolaiGogol/_scripts`.
+#
+# This is a debug surface, not a container dependency: no bind mount, no compose
+# change, and no `container` tag. The role rsyncs the upstream checkout
+# (excluding `.git` and `.env`), renders `.env` for the edge loop, and records a
+# manifest so a redeploy never silently clobbers a debugger's local edits.
+nikolaigogol_scripts_enabled: true
+nikolaigogol_scripts_source_dir: "{{ lookup('env', 'HOME') }}/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol"
+nikolaigogol_scripts_dir: "{{ zterra_root }}/local-/Projects/@NikolaiGogol/_scripts"
+nikolaigogol_scripts_rsync_excludes:
+  - ".git"
+  - ".env"
+  - "result-*"
+  - "node_modules"
+  - ".yarn/cache"
+# `ansible.posix.synchronize` requires a real list. Build it once as a role var
+# (the same shape nixos_image_sync passes directly) so the task never hands the
+# module a stringified Python list.
+nikolaigogol_scripts_rsync_opts: >-
+  {{ nikolaigogol_scripts_rsync_excludes
+     | map('regex_replace', '^', '--exclude=') | list
+     + ['--omit-dir-times'] }}
+nikolaigogol_scripts_force: false

@@ -1,0 +1,285 @@
+---
+# Runs against @terra. The upstream checkout lives on the control node and is
+# pushed over the existing Ansible SSH connection (same pattern as
+# nixos_image_sync). No git runs on the target.
+
+- name: Skip the role when disabled
+  ansible.builtin.meta: end_role
+  when: not (nikolaigogol_scripts_enabled | bool)
+
+- name: Check the upstream scripts source on the control node
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  delegate_to: localhost
+  become: false
+  loop:
+    - "{{ nikolaigogol_scripts_source_dir }}"
+    - "{{ nikolaigogol_scripts_source_dir }}/switch-nixos.sh"
+    - "{{ nikolaigogol_scripts_source_dir }}/Makefile"
+  register: nikolaigogol_scripts_source
+  loop_control:
+    label: "{{ item }}"
+  changed_when: false
+
+- name: Assert the upstream scripts source is complete
+  ansible.builtin.assert:
+    that:
+      - nikolaigogol_scripts_source.results[0].stat.isdir | default(false)
+      - nikolaigogol_scripts_source.results[1].stat.exists | default(false)
+      - nikolaigogol_scripts_source.results[2].stat.exists | default(false)
+    fail_msg: >-
+      nikolaigogol_scripts_source_dir
+      "{{ nikolaigogol_scripts_source_dir }}" must be a checkout of the upstream
+      @NikolaiGogol repo containing Makefile and switch-nixos.sh. Point
+      nikolaigogol_scripts_source_dir at it (for example
+      -e nikolaigogol_scripts_source_dir=/path/to/@NikolaiGogol) or clone the
+      repo there.
+
+- name: Ensure the scripts deployment directory exists
+  ansible.builtin.file:
+    path: "{{ nikolaigogol_scripts_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Inspect the scripts deployment directory
+  ansible.builtin.stat:
+    path: "{{ nikolaigogol_scripts_dir }}"
+  register: nikolaigogol_scripts_dir_state
+  changed_when: false
+
+- name: Report the skipped target work while the directory is absent
+  ansible.builtin.debug:
+    msg: >-
+      {{ nikolaigogol_scripts_dir }} does not exist yet (a --check run does not
+      create it); skipped target inspection, sync and verification.
+  when: not (nikolaigogol_scripts_dir_state.stat.exists | default(false))
+
+- name: Deploy and verify the scripts in the target directory
+  when: nikolaigogol_scripts_dir_state.stat.exists | default(false)
+  block:
+    - name: Inspect the deployment manifest
+      ansible.builtin.stat:
+        path: "{{ nikolaigogol_scripts_dir }}/.deploy-state"
+      register: nikolaigogol_scripts_state
+      changed_when: false
+
+    - name: Read the deployment manifest
+      ansible.builtin.slurp:
+        src: "{{ nikolaigogol_scripts_dir }}/.deploy-state"
+      register: nikolaigogol_scripts_state_raw
+      when: nikolaigogol_scripts_state.stat.exists
+      changed_when: false
+
+    - name: Parse the deployment manifest when present
+      ansible.builtin.set_fact:
+        nikolaigogol_scripts_manifest: >-
+          {{ (nikolaigogol_scripts_state_raw.content | b64decode | from_yaml)
+             if nikolaigogol_scripts_state.stat.exists else {} }}
+
+    # Hash the target, not the source: the manifest detects local edits made by
+    # a debugger between deploys. `.env` is rendered here and `.deploy-state*`
+    # is the manifest itself, so both are excluded from the payload digest.
+    - name: Hash the current target tree
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - >-
+            set -euo pipefail; cd "$1";
+            find . -type f ! -name '.deploy-state' ! -name '.deploy-state.*'
+            ! -name '.env' -print0
+            | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1
+          - bash
+          - "{{ nikolaigogol_scripts_dir }}"
+      register: nikolaigogol_scripts_current
+      changed_when: false
+      check_mode: false
+
+    - name: Guard against overwriting local debug edits
+      when:
+        - nikolaigogol_scripts_state.stat.exists
+        - not (nikolaigogol_scripts_force | bool)
+        - (nikolaigogol_scripts_current.stdout | trim) !=
+          (nikolaigogol_scripts_manifest.tree_sha256 | default(''))
+      block:
+        - name: Stage the recorded digests for a drift report
+          ansible.builtin.copy:
+            content: "{{ (nikolaigogol_scripts_manifest.files | default([])) | join('\n') }}"
+            dest: "{{ nikolaigogol_scripts_dir }}/.deploy-state.drift"
+            mode: "0600"
+          when: (nikolaigogol_scripts_manifest.files | default([])) | length > 0
+          check_mode: false
+
+        - name: List the drifted files
+          ansible.builtin.command:
+            cmd: sha256sum -c .deploy-state.drift
+            chdir: "{{ nikolaigogol_scripts_dir }}"
+          register: nikolaigogol_scripts_drift
+          when: (nikolaigogol_scripts_manifest.files | default([])) | length > 0
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Remove the drift report input
+          ansible.builtin.file:
+            path: "{{ nikolaigogol_scripts_dir }}/.deploy-state.drift"
+            state: absent
+          when: (nikolaigogol_scripts_manifest.files | default([])) | length > 0
+          check_mode: false
+
+        - name: Fail on a dirty target
+          ansible.builtin.fail:
+            msg: >-
+              {{ nikolaigogol_scripts_dir }}/.deploy-state records tree
+              {{ nikolaigogol_scripts_manifest.tree_sha256 }}, but the target now
+              hashes to {{ nikolaigogol_scripts_current.stdout | trim }}.
+              Drifted files:
+              {{ (nikolaigogol_scripts_drift.stdout_lines | default([])
+                 | select('search', 'FAILED') | list
+                 | join('; ')) | default('(added files only; see the tree hashes)', true) }}.
+              Inspect the local edits, then re-run with
+              -e nikolaigogol_scripts_force=true to overwrite them.
+
+    - name: Sync the upstream scripts into _scripts
+      ansible.posix.synchronize:
+        src: "{{ nikolaigogol_scripts_source_dir }}/"
+        dest: "{{ nikolaigogol_scripts_dir }}/"
+        mode: push
+        archive: true
+        checksum: true
+        delete: false
+        # --omit-dir-times: writing .env/.deploy-state updates the project dir
+        # mtime, so syncing dir times would report a change on every deploy.
+        # The payload files keep their checksum-driven sync.
+        rsync_opts: "{{ nikolaigogol_scripts_rsync_opts }}"
+      register: nikolaigogol_scripts_sync
+
+    - name: Render the edge .env
+      ansible.builtin.template:
+        src: env.j2
+        dest: "{{ nikolaigogol_scripts_dir }}/.env"
+        mode: "0600"
+
+    - name: Hash the deployed target tree
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - >-
+            set -euo pipefail; cd "$1";
+            find . -type f ! -name '.deploy-state' ! -name '.deploy-state.*'
+            ! -name '.env' -print0
+            | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1
+          - bash
+          - "{{ nikolaigogol_scripts_dir }}"
+      register: nikolaigogol_scripts_deployed
+      changed_when: false
+      check_mode: false
+
+    - name: Collect per-file digests for the manifest
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -c
+          - >-
+            set -euo pipefail; cd "$1";
+            find . -type f ! -name '.deploy-state' ! -name '.deploy-state.*'
+            ! -name '.env' -print0
+            | LC_ALL=C sort -z | xargs -0 -r sha256sum
+          - bash
+          - "{{ nikolaigogol_scripts_dir }}"
+      register: nikolaigogol_scripts_digests
+      changed_when: false
+      check_mode: false
+
+    - name: Record the deployment manifest
+      ansible.builtin.copy:
+        content: |
+          ---
+          role: nikolaigogol_scripts
+          source: {{ nikolaigogol_scripts_source_dir }}
+          tree_sha256: {{ nikolaigogol_scripts_deployed.stdout | trim }}
+          deployed_at: {{ ansible_facts['date_time']['iso8601'] }}
+          files: {{ nikolaigogol_scripts_digests.stdout_lines | to_json }}
+        dest: "{{ nikolaigogol_scripts_dir }}/.deploy-state"
+        mode: "0600"
+      when: >-
+        not nikolaigogol_scripts_state.stat.exists
+        or (nikolaigogol_scripts_manifest.tree_sha256 | default('')) !=
+           (nikolaigogol_scripts_deployed.stdout | trim)
+
+    - name: Find the deployed shell scripts
+      ansible.builtin.find:
+        paths: "{{ nikolaigogol_scripts_dir }}"
+        patterns: "*.sh"
+        recurse: true
+        file_type: file
+      register: nikolaigogol_scripts_shell_files
+
+    - name: Syntax-check every deployed shell script
+      ansible.builtin.command:
+        argv:
+          - bash
+          - -n
+          - "{{ item.path }}"
+      loop: "{{ nikolaigogol_scripts_shell_files.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      changed_when: false
+      check_mode: false
+
+    - name: Detect docker on the target
+      ansible.builtin.shell: "command -v docker"  # noqa: command-instead-of-shell
+      register: nikolaigogol_scripts_docker_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Report the skipped compose validation when docker is absent
+      ansible.builtin.debug:
+        msg: >-
+          docker is not installed on {{ inventory_hostname }};
+          skipped `docker compose config -q`.
+      when: nikolaigogol_scripts_docker_check.rc != 0
+
+    - name: Validate the deployed compose file with the rendered .env
+      ansible.builtin.command:
+        cmd: docker compose -f docker-compose-system.yml config -q
+        chdir: "{{ nikolaigogol_scripts_dir }}"
+      when:
+        - nikolaigogol_scripts_docker_check.rc == 0
+        - not ansible_check_mode
+      changed_when: false
+      check_mode: false
+      # noqa: command-instead-of-module
+
+    - name: Detect make on the target
+      ansible.builtin.shell: "command -v make"  # noqa: command-instead-of-shell
+      register: nikolaigogol_scripts_make_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Report the skipped Makefile probe when make is absent
+      ansible.builtin.debug:
+        msg: >-
+          make is not installed on {{ inventory_hostname }};
+          skipped `make -n image-name`.
+      when: nikolaigogol_scripts_make_check.rc != 0
+
+    - name: Confirm the deployed Makefile resolves the image name
+      ansible.builtin.command:
+        cmd: make -n image-name
+        chdir: "{{ nikolaigogol_scripts_dir }}"
+      when:
+        - nikolaigogol_scripts_make_check.rc == 0
+        - not ansible_check_mode
+      changed_when: false
+      check_mode: false
+      # noqa: command-instead-of-module
+
+    - name: Report the scripts deployment
+      ansible.builtin.debug:
+        msg:
+          - "scripts: {{ nikolaigogol_scripts_dir }}"
+          - "changed: {{ nikolaigogol_scripts_sync.changed | default(false) }}"
