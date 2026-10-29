@@ -60,6 +60,11 @@
       - source: "/var/tmp/nikolaigogol/data/Virt_scripts_bootstrap"
         target: "/home/ds13/.bookmarks/Virt_scripts_bootstrap"
         type: directory
+
+    # The upstream scripts checkout lives on the control node, not in the mock.
+    # Include the role so the wiring stays syntax-checked, but disable it: the
+    # mock has no source checkout and the verification probes need docker/make.
+    nikolaigogol_scripts_enabled: false
   roles:
     - role: backup_tos
       tags: [backup]
@@ -82,3 +87,7 @@
       tags: [image]
     - role: nixos_container
       tags: [container]
+    # Debug surface; disabled above so the mock needs no source checkout or
+    # docker/make verification probes.
+    - role: nikolaigogol_scripts
+      tags: [scripts, debug]

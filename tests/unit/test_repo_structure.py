@@ -220,6 +220,7 @@ def test_deploy_nikolaigogol_role_order(deploy_play):
         "nixos_image_sync",
         "nixos_image_load",
         "nixos_container",
+        "nikolaigogol_scripts",
         "nixos_edge_sync",
     ]
 
@@ -237,6 +238,9 @@ def test_deploy_nikolaigogol_role_tags(deploy_play):
     for name in ("nixos_image_artifact", "nixos_image_sync", "nixos_image_load"):
         assert "image" in tags[name], f"{name}: missing 'image' tag"
     assert "container" in tags["nixos_container"]
+    assert "scripts" in tags["nikolaigogol_scripts"]
+    assert "debug" in tags["nikolaigogol_scripts"]
+    assert "container" not in tags["nikolaigogol_scripts"]
     assert "edge_sync" in tags["nixos_edge_sync"]
 
 
