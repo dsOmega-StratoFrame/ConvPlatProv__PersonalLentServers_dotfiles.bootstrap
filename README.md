@@ -241,6 +241,13 @@ Roles, in order, by tag:
 - `container` — `nixos_container` (render `docker-compose-system.yml` + `.env`
   from `group_vars/nikolaigogol/vars.yml`, ensure the mount sources, `docker
   compose up -d`; a handler recreates the container when the config changes).
+- `scripts` (also `debug`) — `nikolaigogol_scripts` rsyncs the upstream
+  `@NikolaiGogol` Docker/edge scripts as-is into
+  `{{ zterra_root }}/local-/Projects/@NikolaiGogol/_scripts` on @terra,
+  renders its `.env`, and verifies `bash -n`, `docker compose config -q` and
+  `make -n image-name`.
+  `_scripts` is a debug surface, not a deployment dependency: it is not a bind
+  mount and has no compose change. `TAGS=container` does not run it.
 - `edge_sync` — optional, **off by default** fast-iteration helper (see below).
 
 **Prerequisites**
@@ -352,6 +359,7 @@ roles/nixos_image_artifact/     # locate + checksum the image on the control nod
 roles/nixos_image_sync/         # rsync the artifact to @terra
 roles/nixos_image_load/         # docker import on @terra
 roles/nixos_container/          # compose + env + mount/container lifecycle
+roles/nikolaigogol_scripts/     # upstream edge scripts in _scripts (debug surface)
 roles/nixos_edge_sync/          # optional fast-iteration helper (off by default)
 tests/                          # unit + integration tests (see tests/README.md)
 Makefile.Steps                  # shared manual-test targets

@@ -1,0 +1,16 @@
+# Manual testing for the upstream @NikolaiGogol edge/debug scripts
+# (role: nikolaigogol_scripts) — the `scripts`/`debug` tags of
+# deploy-nikolaigogol.yml.
+#
+# This is the Phase-0 debug surface: it rsyncs the upstream checkout into
+# `{{ zterra_root }}/local-/Projects/@NikolaiGogol/_scripts` on @terra and
+# renders a standalone `.env`. It is NOT a container dependency — no bind mount,
+# no compose change, and it never runs under TAGS=container.
+#
+# See Makefile.Steps for the target list and INVENTORY selection.
+#   INVENTORY=hosts.ini                       -> real @terra (E2E)
+#   INVENTORY=tests/integration/inventory.ini -> mock container
+STEP_TAGS := scripts
+PLAYBOOK := deploy-nikolaigogol.yml
+VERIFY_PLAYBOOK := verify-nikolaigogol.yml
+include Makefile.Steps

@@ -11,6 +11,9 @@
 #   storage    prepare the zterra namespace (roles/zterra_*)
 #   image      zterra -> artifact -> sync -> load (control node + @terra import)
 #   container  render compose/env, ensure mounts, (re)create the container
+#   scripts    deploy the upstream @NikolaiGogol edge scripts into
+#              {{ zterra_root }}/local-/Projects/@NikolaiGogol/_scripts
+#              (debug surface; also tagged `debug`, never `container`)
 #   edge_sync  optional, inert helper (roles/nixos_edge_sync, off by default)
 #
 # See docs/HomeServer__StratoFrame__ConvPlatProv__NikolaiGogolDeployment_plan.md.
@@ -45,6 +48,10 @@
       tags: [image]
     - role: nixos_container
       tags: [container]
+    # Debug surface: upstream scripts as-is in @NikolaiGogol/_scripts. Not a
+    # container dependency (no bind mount, no compose change); independent of it.
+    - role: nikolaigogol_scripts
+      tags: [scripts, debug]
     # Optional fast-iteration helper; inert unless nixos_edge_sync_enabled=true.
     - role: nixos_edge_sync
       tags: [edge_sync]
