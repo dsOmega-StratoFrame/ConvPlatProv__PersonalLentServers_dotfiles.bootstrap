@@ -5,7 +5,7 @@
 | Input | Value |
 |---|---|
 | Target repo | `PersonalLentServers%Russian_dotfiles.bootstrap` (single initial commit on `main`) |
-| Companion docs read | `docs/HomeServer__HomeAssistant_plan.md`, `docs/adr/0001-HomeServer__HomeAssistant.md`, `docs/Deploy#NixContainer.puml`, `.agents/findings-nixos-image-sync-2026-09-27.md`, `.agents/AGENTS.md`, `tests/README.md` |
+| Companion docs read | `docs/HomeServer__HomeAssistant_plan.md`, `docs/adr/0001-HomeServer__HomeAssistant.md`, `docs/Deploy#NixContainer.puml`, `docs/NikolaiGogol__DependencyLayers_plan.md`, Logseq `ai-rsh Researcher_system/NG-IMAGE-SYNC-001 NikolaiGogol image sync to @terra evidence` (formerly `.agents/findings-nixos-image-sync-2026-09-27.md`), `.agents/AGENTS.md`, `tests/README.md` |
 | Image source (build) | local workstation `~/.bookmarks/shared-configs/Unix_dotfiles`, target `build-NikolaiGogol` → `result-NikolaiGogol/tarball/nixos-system-x86_64-linux.tar.xz` |
 | Deployed source of truth | `ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol` (`docker-compose-system.yml`, `.env.example`, `switch-nixos.sh`, `Makefile`) |
 | Target host | `@terra` — TerraMaster NAS, TOS 6 (already bootstrapped: Docker + Nix by Layer 0) |
@@ -167,7 +167,7 @@ Debug tasks print `artifact path / sha256 / tag`, rsync result, import image id,
 
 ## 11. Out of scope (noted, not planned here)
 
-- `@Manilov` (HAOS VM, Layer 2) provisioning and `HOME_ASSISTANT_IMAGE` staging — only the mount point is created here.
+- `@Manilov` (HAOS VM, Layer 2) runtime provisioning — out of scope. HAOS image staging is **planned** — see [`docs/NikolaiGogol__DependencyLayers_plan.md`](./NikolaiGogol__DependencyLayers_plan.md).
 - `@tangerineDream` launcher/`SYSTEM_STRATEGIES` parity port — aspirational, separate task.
 
 ## 12. Cross-repo content-addressable tag contract (follow-up; ADR 0002)
