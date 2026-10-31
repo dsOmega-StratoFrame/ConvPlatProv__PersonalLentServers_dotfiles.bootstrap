@@ -1,0 +1,86 @@
+' ============================================================================
+' EdgeIteration_scripts__S0FullAuthoritativeDeploy.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S0 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S0 — Full authoritative deploy (TAGS=image,container,scripts)
+
+actor Operator
+participant "Control node" as ControlNode
+participant "Ansible" as Ansible
+participant "Terra (TOS 6)" as Terra
+participant "Docker daemon" as Docker
+participant "Container\nHomeServer__HomeAssistant.NikolaiGogol" as Container
+participant "ScriptsDir\n/zterra/local-/Projects/@NikolaiGogol/_scripts" as ScriptsDir
+
+Operator -> ControlNode : make --directory=[Unix_dotfiles] build-NikolaiGogol (artifact precondition)
+Operator -> ControlNode : run TAGS=image,container,scripts
+ControlNode -> Ansible : ansible-playbook -i hosts.ini deploy-nikolaigogol.yml --tags image,container,scripts
+== Artifact identity on the control node ==
+Ansible -> ControlNode : stat result-NikolaiGogol tarball and compute sha256
+Ansible -> ControlNode : invoke conv-plat-prov.content-tag and assert it equals the sha256 slice
+ControlNode --> Ansible : artifact path, sha256 and 12-hex content tag
+== Image transfer and load ==
+Ansible -> Terra : rsync --checksum tarball to /zterra/local-/var-/cache/nixos-images/[sha].tar.xz
+Ansible -> Docker : docker image inspect ds-omega/nikolaigogol with tag [sha12]
+alt image absent
+    Ansible -> Docker : docker import [sha].tar.xz as ds-omega/nikolaigogol with tag [sha12]
+else image already loaded
+    Ansible -> Ansible : skip docker import
+end
+Docker --> Ansible : image present after inspect
+opt TBD (planned) dependency layers (HAOS, Unix_dotfiles, Virt_scripts)
+    Ansible -> Terra : rsync HAOS 16.3 qcow2 to shared-/@Manilov/dotfiles-/_configs/HomeAssistant__/
+    Ansible -> Terra : rsync Unix_dotfiles and Virt_scripts at their pinned shas
+    Terra -> Terra : verify payload digests and write dependency .deploy-state files
+end
+note over Ansible, Terra
+  Dependency roles are planned in the dependency-layer plan and absent at base HEAD.
+  When disabled, the three bind sources must already exist; HAOS fails closed.
+end note
+== Container recreate ==
+Ansible -> Terra : render docker-compose-system.yml and .env from group vars
+Ansible -> Terra : docker compose -f docker-compose-system.yml config -q
+Ansible -> Docker : community.docker.docker_compose_v2 state=present pull=never
+Docker -> Container : recreate only when the rendered config changed
+Container --> Ansible : container running with image ds-omega/nikolaigogol tag [sha12]
+== Phase 0 scripts surface ==
+Ansible -> ScriptsDir : rsync upstream @NikolaiGogol with delete=false and the Phase 0 excludes
+Ansible -> ScriptsDir : render .env with mode 0600
+Ansible -> ScriptsDir : hash the deployed tree and write .deploy-state when absent or changed
+Ansible -> Terra : bash -n each deployed *.sh
+Ansible -> Terra : docker compose -f docker-compose-system.yml config -q
+Ansible -> Terra : make -n image-name
+Terra --> Ansible : all three checks exit 0
+Ansible --> Operator : report image, container and scripts result
+note over ScriptsDir
+  Debug surface only: no bind mount and no compose change.
+  Tags [scripts, debug] are independent of `container`; TAGS=image,container
+  leaves _scripts untouched. A scripts failure occurs after the container deploy.
+end note
+@enduml

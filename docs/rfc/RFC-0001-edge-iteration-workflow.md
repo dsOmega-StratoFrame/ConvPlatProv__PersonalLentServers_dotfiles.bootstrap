@@ -559,7 +559,7 @@ They are inputs to the refactor in §6, not blockers for Phase 0 acceptance.
   may be absent; the remote check will reveal it.
 - `connect.sh` never sources `REQUIRES_FUNCS`; `info` / `fatal` may be
   undefined on a bare TOS shell.
-Diagrams: docs/EdgeIteration_scripts.puml
+Diagrams: `docs/_diagrams/` (one `.puml` per scenario; see `docs/_diagrams/README.md`)
 
 ## Reverse flow — propagating on-@terra edits back
 
@@ -998,4 +998,4 @@ This extends §7 without changing it:
 | Nothing is auto-promoted | `scripts-pull` stops before branch/commit/push; PR + merge is an operator decision |
 | Deletions are explicit | `--delete` only inside the disposable worktree; the commit message states intent |
 
-Diagram for this section: `docs/EdgeIteration_scripts.puml` (S9).
+Diagram for this section: `docs/_diagrams/EdgeIteration_scripts__S9ReverseFlow.puml` (S9).

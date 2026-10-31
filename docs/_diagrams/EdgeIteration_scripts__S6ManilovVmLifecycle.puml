@@ -1,0 +1,71 @@
+' ============================================================================
+' EdgeIteration_scripts__S6ManilovVmLifecycle.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S6 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S6 — @Manilov VM lifecycle via Virt_scripts_bootstrap
+
+actor Operator
+participant "Container\nHomeServer__HomeAssistant.NikolaiGogol" as Container
+participant "ScriptsDir\n~/.bookmarks/Virt_scripts_bootstrap" as ScriptsDir
+participant "Libvirt\nqemu:///system" as Libvirt
+participant "@Manilov\nHAOS 16.3 VM" as Manilov
+
+Operator -> Container : docker exec -it --user ds13 HomeServer__HomeAssistant.NikolaiGogol bash
+Operator -> ScriptsDir : cd /home/ds13/.bookmarks/Virt_scripts_bootstrap
+Operator -> ScriptsDir : make install
+ScriptsDir -> Libvirt : virt-install --connect qemu:///system ... --print-xml
+Libvirt --> ScriptsDir : generated vmDefinition.xml
+Operator -> ScriptsDir : make define-vm
+ScriptsDir -> Libvirt : virsh -c qemu:///system define vmDefinition.xml
+Operator -> ScriptsDir : make attach-devices
+ScriptsDir -> Libvirt : virsh attach-device hass_qemu16 ZigbeeDongle.xml --config
+Operator -> ScriptsDir : make start
+note right of ScriptsDir
+  start depends on define-vm and attach-devices,
+  so either failure stops the start.
+end note
+ScriptsDir -> Libvirt : virsh start hass_qemu16
+Libvirt -> Manilov : boot HAOS from the bind-mounted haos_ova.qcow2
+Manilov --> Libvirt : domain running
+Operator -> ScriptsDir : make info
+ScriptsDir -> Libvirt : virsh dumpxml hass_qemu16
+Libvirt --> ScriptsDir : domain XML
+opt cleanup as-is
+    Operator -> ScriptsDir : make undefine-vm
+    ScriptsDir -> Libvirt : destroy and undefine hass_qemu16 --nvram --remove-all-storage
+    Libvirt -> Manilov : remove the domain and its storage (destructive as-is)
+end
+note over ScriptsDir, Manilov
+  The qcow2 survives container recreate because it is a host bind, but
+  undefine-vm --remove-all-storage deletes it in the current as-is path.
+  /var/lib/libvirt is not mounted, so domain definitions, NVRAM and
+  virsh edit changes are lost on recreate. Redefine from vmDefinition.xml.
+  install writes --network none, which disagrees with the tap0/MAC intent.
+end note
+@enduml

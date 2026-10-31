@@ -1,0 +1,60 @@
+' ============================================================================
+' EdgeIteration_scripts__S3EdgeConfigIteration.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S3 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S3 — Edge config iteration inside the container
+
+actor Operator
+participant "Terra (TOS 6)" as Terra
+participant "Container\nHomeServer__HomeAssistant.NikolaiGogol" as Container
+
+Operator -> Terra : ssh terra
+Terra -> Container : docker exec -it --user ds13 HomeServer__HomeAssistant.NikolaiGogol bash
+Operator -> Container : edit /home/ds13/.bookmarks/shared-configs/Unix_dotfiles
+alt test (default edge loop)
+    Operator -> Container : nixos-rebuild test --flake /home/ds13/.bookmarks/shared-configs/Unix_dotfiles#NikolaiGogol
+    Container -> Container : activate the new system for this boot
+    Container --> Operator : no boot entry created
+else switch (explicit edge-commit)
+    Operator -> Container : nixos-rebuild switch --flake /home/ds13/.bookmarks/shared-configs/Unix_dotfiles#NikolaiGogol
+    Container -> Container : write a container-local boot generation
+    Container --> Operator : generation survives restart, not recreate
+end
+Operator -> Container : observe HomeAssistant and @Manilov behaviour
+opt rollback
+    Operator -> Container : nixos-rebuild --rollback switch
+    Container --> Operator : previous generation restored
+end
+note over Container
+  A source edit in the Unix_dotfiles bind may survive, but the activation,
+  installed packages, /etc edits, units and rebuild generations are ephemeral.
+  docker rm or recreate discards them; a switch is not promotion.
+  Promotion is commit, then pin, then image deploy (S4).
+end note
+@enduml

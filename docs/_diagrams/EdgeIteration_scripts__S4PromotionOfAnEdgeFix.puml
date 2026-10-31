@@ -1,0 +1,61 @@
+' ============================================================================
+' EdgeIteration_scripts__S4PromotionOfAnEdgeFix.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S4 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S4 — Promotion of an edge fix
+
+actor Operator
+participant "Upstream repos\nUnix_dotfiles / Virt_scripts" as UpstreamRepos
+participant "Pins" as Pins
+participant "Control node" as ControlNode
+participant "Ansible" as Ansible
+participant "Terra (TOS 6)" as Terra
+participant "Docker daemon" as Docker
+participant "Container\nHomeServer__HomeAssistant.NikolaiGogol" as Container
+participant "ScriptsDir\n/zterra/local-/Projects/@NikolaiGogol/_scripts" as ScriptsDir
+
+Operator -> UpstreamRepos : commit the verified edge fix
+UpstreamRepos --> Operator : commit sha
+Operator -> Pins : refs-update REF=[commit sha]
+Pins --> Operator : pin variable set to the 40-hex sha
+Operator -> ControlNode : build the artifact from the pinned checkout
+Operator -> Ansible : run the full authoritative deploy S0 (TAGS=image,container,scripts)
+Ansible -> Terra : sync dependencies at the pin and load the content-tagged image
+Terra -> Docker : docker import image as ds-omega/nikolaigogol with tag [sha12]
+Docker -> Container : recreate HomeServer__HomeAssistant.NikolaiGogol from the new image
+Ansible -> ScriptsDir : refresh _scripts only when the scripts tag is included
+Container --> Operator : edge fix promoted, container-layer state discarded
+Operator -> Terra : verify with S7; for VM definitions also run S6
+note over UpstreamRepos, Container
+  There is no copy-out path from the edge loop.
+  The source commit is the only promotion artifact.
+  A script-only change may leave the image unchanged; a VM-definition-only
+  change still needs the domain redefined in S6.
+end note
+@enduml

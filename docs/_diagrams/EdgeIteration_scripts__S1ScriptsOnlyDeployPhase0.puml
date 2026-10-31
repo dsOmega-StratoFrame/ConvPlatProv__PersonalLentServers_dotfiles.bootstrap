@@ -1,0 +1,75 @@
+' ============================================================================
+' EdgeIteration_scripts__S1ScriptsOnlyDeployPhase0.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S1 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S1 — Scripts-only deploy (Phase 0)
+
+actor Operator
+participant "Control node" as ControlNode
+participant "Ansible" as Ansible
+participant "Terra (TOS 6)" as Terra
+participant "ScriptsDir\n/zterra/local-/Projects/@NikolaiGogol/_scripts" as ScriptsDir
+
+Operator -> ControlNode : run TAGS=scripts via Makefile.NixosScripts
+ControlNode -> Ansible : ansible-playbook -i hosts.ini deploy-nikolaigogol.yml --tags scripts
+Ansible -> ControlNode : assert source dir, switch-nixos.sh and Makefile exist
+alt source assertion fails
+    Ansible --> Operator : fail with the expected upstream path and remediation
+else source complete
+    Ansible -> Terra : ensure _scripts exists with mode 0755
+    Ansible -> ScriptsDir : read .deploy-state when present
+    Ansible -> ScriptsDir : hash target tree excluding .env and .deploy-state*
+    ScriptsDir --> Ansible : current tree_sha256
+    alt clean (no manifest or tree_sha256 matches)
+        Ansible -> ScriptsDir : rsync --checksum --omit-dir-times with delete=false
+        note right of Ansible
+          Excludes: .git, .env, result-*,
+          node_modules, .yarn/cache
+        end note
+        Ansible -> ScriptsDir : render .env with mode 0600
+        Ansible -> ScriptsDir : hash deployed tree and write .deploy-state when absent or changed
+        Ansible -> ScriptsDir : bash -n each *.sh
+        Ansible -> Terra : docker compose -f docker-compose-system.yml config -q
+        Ansible -> Terra : make -n image-name
+        Terra --> Ansible : verification exit 0
+        Ansible --> Operator : report scripts path, changed state and verification
+    else drift (hash differs and force=false)
+        Ansible -> ScriptsDir : sha256sum -c .deploy-state.drift
+        Ansible --> Operator : fail and list the drifted paths
+        Operator -> Ansible : re-run with -e nikolaigogol_scripts_force=true
+        Ansible -> ScriptsDir : rsync overwrite, render .env, rewrite manifest
+        Ansible --> Operator : report forced deploy
+    end
+end
+note over ScriptsDir
+  delete=false leaves stale files and debugger additions in place.
+  The manifest and drift report are the visibility mechanism.
+  Missing docker or make skips only that validation probe; the role continues.
+end note
+@enduml

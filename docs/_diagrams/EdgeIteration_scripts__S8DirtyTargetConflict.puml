@@ -1,0 +1,67 @@
+' ============================================================================
+' EdgeIteration_scripts__S8DirtyTargetConflict.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S8 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S8 — Dirty-target conflict during scripts redeploy
+
+actor Operator
+participant "ScriptsDir\n/zterra/local-/Projects/@NikolaiGogol/_scripts" as ScriptsDir
+participant "Control node" as ControlNode
+participant "Ansible" as Ansible
+participant "Terra (TOS 6)" as Terra
+
+Operator -> ScriptsDir : ad-hoc edit a script, compose file or .env
+ScriptsDir --> Operator : local content changes, manifest untouched
+Operator -> ControlNode : run TAGS=scripts redeploy
+ControlNode -> Ansible : ansible-playbook -i hosts.ini deploy-nikolaigogol.yml --tags scripts
+Ansible -> ScriptsDir : hash target tree excluding .env and .deploy-state*
+ScriptsDir --> Ansible : current tree_sha256
+Ansible -> Ansible : compare with .deploy-state tree_sha256
+Ansible -> ScriptsDir : sha256sum -c .deploy-state.drift
+Ansible --> Operator : fail with the drifted paths and the force hint
+alt force=true
+    Operator -> Ansible : re-run with -e nikolaigogol_scripts_force=true
+    Ansible -> ScriptsDir : rsync overwrite with delete=false, render .env, hash deployed tree
+    Ansible -> ScriptsDir : write the new .deploy-state manifest
+    ScriptsDir --> Ansible : new tree_sha256 recorded; extra files retained
+    Ansible --> Operator : report forced deploy
+else revert
+    Operator -> ScriptsDir : revert the local edit
+    Operator -> Ansible : re-run TAGS=scripts
+    Ansible -> ScriptsDir : hash matches .deploy-state
+    ScriptsDir --> Ansible : clean target
+    Ansible -> ScriptsDir : rsync, render .env and verify
+    Ansible --> Operator : report clean deploy
+end
+note over ScriptsDir
+  The manifest is updated only after a successful sync and hash.
+  A failed drift guard leaves the previous payload and manifest intact.
+  force=true is a one-run override and is not persisted in the manifest.
+end note
+@enduml

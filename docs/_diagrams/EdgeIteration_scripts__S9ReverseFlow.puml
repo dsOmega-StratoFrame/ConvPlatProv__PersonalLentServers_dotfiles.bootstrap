@@ -1,0 +1,76 @@
+' ============================================================================
+' EdgeIteration_scripts__S9ReverseFlow.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S9 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S9 — Reverse flow: propagating on-@terra edits back
+
+actor Operator
+participant "Ansible" as Ansible
+participant "Terra (TOS 6)" as Terra
+participant "ScriptsDir\n/zterra/local-/Projects/@NikolaiGogol/_scripts" as ScriptsDir
+participant "Control staging + worktree\n(pinned commit, disposable)" as Staging
+participant "Upstream repo\nConvPlatProv__NikolaiGogol" as UpstreamRepos
+participant "Pins\nsuperproject gitlink + refs-update" as Pins
+
+Operator -> Ansible : re-run S1 (make -f Makefile.NixosScripts dry)
+Ansible -> ScriptsDir : hash target tree and compare with .deploy-state
+alt tree_sha256 matches
+    Ansible --> Operator : clean; nothing to pull
+else drift and force=false
+    Ansible --> Operator : fail before rsync and list the FAILED paths (S8)
+end
+Operator -> Staging : create $PULL_ROOT/(stamp)/snapshot and /worktree
+Operator -> Terra : rsync -az --checksum --no-owner --no-group (no --delete)
+Terra -> ScriptsDir : read _scripts over SSH
+ScriptsDir --> Staging : snapshot/ minus .env, .deploy-state*, .git, node_modules, .yarn/cache, result-*
+Operator -> UpstreamRepos : PIN_SUB = git rev-parse (PIN_SUPER):@NikolaiGogol
+Operator -> UpstreamRepos : git worktree add --detach (worktree) (PIN_SUB)
+Operator -> Staging : rsync -a --checksum --delete --exclude=.git snapshot/ worktree/
+Staging -> Staging : git add -A; diff --cached --stat, --summary, --numstat, --cached
+Staging --> Operator : delta vs pin: added, modified, deleted, Bin, mode
+alt review or bash -n rejects
+    Operator -> Staging : fix in the disposable worktree and re-check
+    Staging --> Operator : no commit, no push
+else accepted
+    Operator -> UpstreamRepos : git switch -c edge/terra-(date); one commit per logical fix
+    UpstreamRepos -> UpstreamRepos : git push -u origin edge/terra-(date)
+    UpstreamRepos --> Operator : branch pushed; PR opened, no auto-merge
+end
+Operator -> Pins : bump the @NikolaiGogol gitlink, commit, refs-update to the new pin
+Pins --> Operator : new superproject sha recorded (scripts role has no pin var at base HEAD)
+Operator -> Ansible : run S0 (TAGS=image,container,scripts) or S1 for scripts-only
+Ansible -> ScriptsDir : re-sync, re-render .env, rewrite .deploy-state
+ScriptsDir --> Operator : next run is clean; target still has no git and no key
+note over Operator, Pins
+  The target has no git and no credential; every step runs on the control node.
+  Never force=true before the snapshot exists: forcing overwrites the only copy.
+  The worktree is disposable; --delete is only ever used inside it.
+  @NikolaiGogol is a submodule: a superproject-only commit records just a gitlink.
+end note
+@enduml

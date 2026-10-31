@@ -1,0 +1,63 @@
+' ============================================================================
+' EdgeIteration_scripts__S5DependencyRefPinning.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S5 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S5 — Dependency ref pinning (refs-list and refs-update)
+
+actor Operator
+participant "Pins" as Pins
+participant "Upstream repos\nVirt_scripts / Unix_dotfiles" as UpstreamRepos
+participant "Control node" as ControlNode
+participant "Ansible" as Ansible
+participant "Terra (TOS 6)" as Terra
+
+Operator -> Pins : make refs-list
+Pins -> UpstreamRepos : resolve the configured ref
+UpstreamRepos --> Pins : 40-hex sha and commit subject
+Pins --> Operator : repo, configured ref, resolved sha, subject
+Operator -> Pins : make refs-update [REF=[ref]]
+alt REF supplied
+    Pins -> UpstreamRepos : resolve REF
+else no REF supplied
+    Pins -> UpstreamRepos : resolve the configured default branch (main for Virt_scripts, dev for Unix_dotfiles)
+end
+UpstreamRepos --> Pins : concrete commit
+Pins -> Pins : write the 40-hex sha into the pin variable, never a branch name
+Operator -> Ansible : deploy with the updated pins
+Ansible -> ControlNode : git checkout [pinned sha] detached and assert rev-parse HEAD equals the pin
+ControlNode --> Ansible : checkout verified
+Ansible -> Terra : rsync dependency payload and write .deploy-state with ref, commit and tree digest
+Terra --> Ansible : dependency layer deployed at the pinned identity
+Ansible --> Operator : report pinned refs and deployed shas
+note over Pins
+  refs-list and refs-update are planned in the dependency-layer plan and
+  absent at base HEAD. A branch name is a moving target, so refs-update
+  always records a concrete sha; the target never sees git or a key.
+end note
+@enduml

@@ -1,0 +1,42 @@
+' ============================================================================
+' EdgeIteration_scripts__IndexSharedFacts.puml
+'
+' Purpose : PlantUML sequence diagram for the shared-facts legend and diagram index of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+title EdgeIteration_scripts — Shared facts and diagram index
+legend
+source:    $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+target:    /zterra/local-/Projects/@NikolaiGogol/_scripts
+container: HomeServer__HomeAssistant.NikolaiGogol
+Phase 0 = deploy scripts as-is; _scripts is a debug surface with no bind mount,
+no compose change, tags [scripts, debug], and no implication from container.
+
+S0 full deploy; S1 scripts-only; S2 remote edit; S3 in-container rebuild;
+S4 promotion; S5 ref pinning; S6 VM lifecycle; S7 remote check; S8 drift;
+S9 reverse flow (pull the on-@terra edits back).
+endlegend
+@enduml

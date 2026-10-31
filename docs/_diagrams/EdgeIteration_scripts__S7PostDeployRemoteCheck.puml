@@ -1,0 +1,56 @@
+' ============================================================================
+' EdgeIteration_scripts__S7PostDeployRemoteCheck.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S7 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S7 — Post-deploy remote check (Phase 0 acceptance)
+
+actor Operator
+participant "Terra (TOS 6)" as Terra
+participant "ScriptsDir\n/zterra/local-/Projects/@NikolaiGogol/_scripts" as ScriptsDir
+participant "Docker daemon" as Docker
+
+Operator -> Terra : ssh terra
+Operator -> ScriptsDir : ls -A /zterra/local-/Projects/@NikolaiGogol/_scripts
+ScriptsDir --> Operator : upstream files, no .git, .env mode 0600, .deploy-state
+Operator -> ScriptsDir : bash -n each *.sh
+ScriptsDir --> Operator : syntax OK
+Operator -> Terra : cd _scripts and docker compose -f docker-compose-system.yml config -q
+Terra -> Docker : validate compose with the rendered .env
+Docker --> Terra : exit 0
+Operator -> ScriptsDir : make -n image-name
+ScriptsDir --> Operator : ds-omega/nikolaigogol with tag latest
+note over Operator, ScriptsDir
+  Three expected Phase 0 caveats, not S7 failures:
+  - switch-nixos.sh hard-codes ~/.bookmarks/shared-configs/Unix_dotfiles,
+    not the @terra checkout path.
+  - the scripts call sudo docker; terra is uid 0 and sudo may be absent.
+  - connect.sh has no REQUIRES_FUNCS; info and fatal may be undefined.
+  S7 never runs switch-nixos.sh; it proves the bytes and validation only.
+end note
+@enduml

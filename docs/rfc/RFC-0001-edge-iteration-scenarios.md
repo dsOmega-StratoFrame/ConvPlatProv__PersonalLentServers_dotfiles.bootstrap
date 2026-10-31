@@ -748,7 +748,7 @@ GitHub access.
 
 ## 5. Diagram guidance for the architect
 
-Render **S0, S1, S2, S3, S6, S7, and S8** as separate `@startuml` blocks: S0 is
+Render **S0, S1, S2, S3, S6, S7, and S8** as separate `.puml` files under `docs/_diagrams/`: S0 is
 the authoritative end-to-end deploy, S1 is the Phase 0 scripts-only flow, S2 and
 S3 are the two unmanaged edge paths (remote files vs in-container rebuild), S6 is
 the VM/libvirt lifecycle, S7 is the acceptance check, and S8 is the dirty-target
@@ -765,6 +765,6 @@ promotion) and merging them would imply a single writer and a single lifetime
 that the RFC explicitly rejects.
 
 `S9` (reverse flow: recovering on-`@terra` edits) is also rendered as its own
-block. It is appended here rather than folded into S0–S8 because it runs in the
+file under `docs/_diagrams/`. It is appended here rather than folded into S0–S8 because it runs in the
 opposite direction and has its own authority boundaries (pull, review, commit,
 re-pin, deploy).

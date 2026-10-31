@@ -1,0 +1,69 @@
+' ============================================================================
+' EdgeIteration_scripts__S2AdHocDebugEditOnTerra.puml
+'
+' Purpose : PlantUML sequence diagram for scenario S2 of the @NikolaiGogol /
+'           _scripts edge-iteration workflow on @terra.
+' RFC     : docs/rfc/RFC-0001-edge-iteration-workflow.md
+' Scenarios: docs/rfc/RFC-0001-edge-iteration-scenarios.md (authoritative
+'           analyst catalogue; this file renders the scenario below).
+' Date    : 2026-10-29
+' Base    : 004ee9e
+'
+' Split from the former single-file EdgeIteration_scripts.puml so each diagram renders to its
+' own file. Render with: plantuml -tpng -tsvg docs/_diagrams/*.puml
+'
+' Shared facts:
+'   source    = $HOME/.bookmarks/shared-projects/ChronoIndex/2026/ConvPlatProv-HomeServer__HomeAssistant/@NikolaiGogol
+'   target    = /zterra/local-/Projects/@NikolaiGogol/_scripts
+'   container = HomeServer__HomeAssistant.NikolaiGogol
+'
+' Phase 0 = deploy scripts as-is.
+'   /zterra/local-/Projects/@NikolaiGogol/_scripts is a DEBUG SURFACE:
+'   no bind mount, no compose change, tags [scripts, debug], and it is not
+'   implied by `container`. It is not the deployment path.
+'
+' Style: one start/end block per scenario, autonumber per diagram,
+'        participants declared only where used (cf. docs/Deploy#NixContainer.puml).
+' ============================================================================
+
+@startuml
+autonumber
+title S2 — Ad-hoc debug/edit on @terra
+
+actor Operator
+participant "Terra (TOS 6)" as Terra
+participant "Docker daemon" as Docker
+participant "Container\nHomeServer__HomeAssistant.NikolaiGogol" as Container
+participant "ScriptsDir\n/zterra/local-/Projects/@NikolaiGogol/_scripts" as ScriptsDir
+
+Operator -> Terra : ssh terra
+Terra -> ScriptsDir : cd /zterra/local-/Projects/@NikolaiGogol/_scripts
+Operator -> ScriptsDir : edit a script, docker-compose-system.yml or .env
+Operator -> ScriptsDir : bash -n [edited script].sh
+alt compose file edited
+    Operator -> Terra : docker compose -f docker-compose-system.yml config -q
+    Terra -> Docker : validate compose with the rendered .env
+    Docker --> Terra : exit 0
+end
+opt Makefile or target edited
+    Operator -> ScriptsDir : make -n [changed target]
+end
+Operator -> Terra : make stop-system-container
+Terra -> Docker : sudo docker stop HomeServer__HomeAssistant.NikolaiGogol
+Operator -> Terra : make rm-system-container
+Terra -> Docker : sudo docker rm HomeServer__HomeAssistant.NikolaiGogol
+Operator -> Terra : make import-nixos
+Terra -> Docker : sudo docker import tarball and tag the debug image
+Operator -> Terra : make start-system
+Terra -> Docker : sudo docker compose up --detach
+Docker -> Container : recreate and start the managed container
+Operator -> Terra : ./connect.sh or make connect-nixos
+Terra -> Container : docker exec -it --user ds13 ... bash
+note over Operator, Container
+  This path bypasses roles/nikolaigogol_scripts and can race the
+  Ansible-managed container. Two writers to the same container is
+  undefined behaviour, and the recreate drops container-layer state.
+  No Ansible report or .deploy-state update is produced; a later S1/S0
+  re-renders .env and treats edited payload files as drift (S8).
+end note
+@enduml
