@@ -209,10 +209,53 @@ def test_verify_task_uses_the_nix_env_path():
     assert verify["environment"]["PATH"] == "{{ bootstrap_nix_env_path }}"
 
 
-def test_install_block_gates_on_a_needed_install():
+def test_install_block_gates_on_the_store_not_path():
     block = _find_block(_tasks(), "Install Nix (multi-user, systemd)")
-    assert "bootstrap_nix_command.rc != 0" in block["when"]
+    assert "bootstrap_nix_installed" in block["when"]
     assert "bootstrap_nix_force_reinstall" in block["when"]
+    # A PATH probe is wrong in both directions (2026-10-11 incident).
+    for task in _iter_tasks(_tasks()):
+        for key in ("ansible.builtin.shell", "shell", "ansible.builtin.command", "command"):
+            assert "command -v nix" not in str(task.get(key, ""))
+
+
+def test_install_gate_counts_the_store():
+    gate = _find_task(_tasks(), "Count the entries in the Nix store")
+    assert gate["ansible.builtin.find"]["paths"] == "{{ bootstrap_nix_store_dir }}"
+    assert gate["register"] == "bootstrap_nix_store_entries"
+    fact = _find_task(_tasks(), "Decide whether the Nix store already exists")
+    assert "bootstrap_nix_store_entries.matched" in (
+        fact["ansible.builtin.set_fact"]["bootstrap_nix_installed"]
+    )
+
+
+def test_empty_store_behind_a_mount_fails_fast():
+    guard = _find_task(
+        _tasks(), "Fail-fast when an empty store is hidden behind a mount"
+    )
+    conditions = " ".join(guard["ansible.builtin.assert"]["that"])
+    assert "bootstrap_nix_allow_empty_mount" in conditions
+    assert "bootstrap_nix_expected_mount_check.rc" in conditions
+    assert guard["when"] == "not bootstrap_nix_installed"
+    assert _defaults()["bootstrap_nix_allow_empty_mount"] is False
+
+
+def test_terra_points_the_empty_mount_gate_at_the_zterra_bind():
+    terra = yaml.safe_load(
+        (REPO / "group_vars" / "terra" / "vars.yml").read_text()
+    )
+    assert terra["bootstrap_nix_expected_mount_source"].endswith("/local-/nix")
+
+
+def test_post_install_asserts_the_store_and_daemon():
+    tasks = _tasks()
+    assert _find_task(tasks, "Assert the Nix store is populated")
+    assert _find_task(
+        tasks, "Assert the nix-daemon service is installed, enabled and running"
+    )
+    unit = _find_task(tasks, "Stat the nix-daemon service unit")
+    assert unit["ansible.builtin.stat"]["follow"] is True
+    assert _defaults()["bootstrap_nix_assert_daemon"] is True
 
 
 def test_install_block_guards_and_wires_gnu_install():

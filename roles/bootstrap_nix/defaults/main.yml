@@ -37,6 +37,21 @@ bootstrap_nix_env_path: >-
          | default('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')])
     | join(':')
   }}
+# Install gate and post-install assertions. The gate is the store, not
+# `command -v nix`: a PATH probe cannot tell an installed store from a mount
+# that hides one (2026-10-11 zterra incident).
+bootstrap_nix_root: "/nix"
+bootstrap_nix_store_dir: "/nix/store"
+# Bind source that must back bootstrap_nix_root when the store is empty and
+# /nix is a mountpoint (e.g. "{{ zterra_root }}/local-/nix" on @terra). Empty
+# disables the identity check.
+bootstrap_nix_expected_mount_source: ""
+# Set true only for a deliberate clean reinstall into an empty bind
+# (NIX-TERRA-001 Option B). Otherwise an empty store behind a mount fails fast.
+bootstrap_nix_allow_empty_mount: false
+# Assert nix-daemon is enabled/active and its unit symlink resolves. Turn off
+# only on a target without systemd.
+bootstrap_nix_assert_daemon: true
 bootstrap_nix_force_reinstall: false
 bootstrap_nix_flakes: true
 bootstrap_nix_remove_nix_directory: false

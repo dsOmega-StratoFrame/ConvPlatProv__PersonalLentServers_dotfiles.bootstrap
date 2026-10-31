@@ -32,6 +32,7 @@ ENV_KEYS = (
     "NAMESPACE",
     "IMAGE_BASE_NAME",
     "IMAGE_TAG",
+    "IMAGE_NAME",
     "CONTAINER_NAME",
 )
 
@@ -214,6 +215,22 @@ def test_env_template_static_values():
     assert "HOME_ASSISTANT_IMAGE={{ nixos_container_home_assistant_image }}" in text
     assert "CONTAINER_USERNAME={{ nixos_container_username }}" in text
     assert "CONTAINER_NAME={{ nixos_container_name }}" in text
+
+
+def test_env_template_derives_image_name_from_ansible_vars():
+    text = ENV_TEMPLATE.read_text()
+    rendered = Template(text).render(
+        nixos_container_unix_dotfiles_dir="/data/Unix_dotfiles",
+        nixos_container_virt_scripts_dir="/data/Virt_scripts_bootstrap",
+        nixos_container_home_assistant_image="/data/haos.qcow2",
+        nixos_container_username="ds13",
+        nixos_container_name="HomeServer__HomeAssistant.NikolaiGogol",
+        nixos_container_image_repository="ds-omega/nikolai-gogol",
+    )
+    lines = rendered.splitlines()
+    assert "IMAGE_NAME=ds-omega/nikolai-gogol:latest" in lines
+    # Derived from the existing image identity, not a duplicated literal.
+    assert "{{ nixos_container_image_repository" in text
 
 
 def test_env_is_rendered_0600(tasks):

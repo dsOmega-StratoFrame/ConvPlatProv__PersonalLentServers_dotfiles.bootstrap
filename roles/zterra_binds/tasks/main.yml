@@ -57,6 +57,43 @@
   loop_control:
     label: "{{ item.item.target }}"
 
+# A bind hides whatever already lives at its target. On 2026-10-11 an empty
+# subvolume was bound over /nix and the real store disappeared; nothing in this
+# role refused that. Refuse by default. `replace: true` targets (the vendor
+# tmpfs over /tmp) are intentionally shadowed, and `allow_shadow: true` opts a
+# plain entry in.
+- name: Check whether a bind target would shadow existing content
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - >-
+        if [ ! -e {{ item.target }} ]; then exit 0; fi;
+        if [ "$(stat -c %d:%i {{ item.target }})" = "$(stat -c %d:%i {{ item.source }})" ]; then
+          exit 0;
+        fi;
+        [ -z "$(ls -A {{ item.target }})" ]
+  register: zterra_binds_shadow_check
+  loop: "{{ zterra_binds_mounts }}"
+  loop_control:
+    label: "{{ item.target }}"
+  changed_when: false
+  failed_when: false
+
+- name: Fail-closed when a bind would shadow a non-empty target
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+        or (item.item.replace | default(false))
+        or (item.item.allow_shadow | default(false))
+    fail_msg: >-
+      Bind target {{ item.item.target }} is not empty and is not already bound
+      to {{ item.item.source }}; mounting over it would hide that content.
+      Set allow_shadow: true on this entry only if hiding it is intended.
+  loop: "{{ zterra_binds_shadow_check.results }}"
+  loop_control:
+    label: "{{ item.item.target }}"
+
 - name: Derive each bind unit name
   ansible.builtin.command: >-
     systemd-escape -p --suffix=mount {{ item.target }}
@@ -145,6 +182,36 @@
   when:
     - not (item.skipped | default(false))
     - item.rc != 0
+
+# A bind that has been "started" is not proof that it took effect: systemd can
+# leave the target on the old filesystem. Compare the resolved device:inode
+# identity of each target and its source (the 2026-10-11 /nix symptom was a
+# mount that existed but was empty).
+- name: Verify each bind target resolves to its source
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - '[ "$(stat -c %d:%i {{ item.target }})" = "$(stat -c %d:%i {{ item.source }})" ]'
+  register: zterra_binds_identity
+  loop: "{{ zterra_binds_mounts }}"
+  loop_control:
+    label: "{{ item.target }}"
+  changed_when: false
+  failed_when: false
+  environment:
+    TMPDIR: "{{ zterra_binds_module_tmpdir }}"
+
+- name: Fail when a bind target does not resolve to its source
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+    fail_msg: >-
+      Bind target {{ item.item.target }} is not the same filesystem object as
+      {{ item.item.source }}; the mount did not take effect.
+  loop: "{{ zterra_binds_identity.results }}"
+  loop_control:
+    label: "{{ item.item.target }}"
 
 # A unit retired from zterra_binds_mounts (e.g. the /var/log bind, D-LOG) stays
 # enabled on the device unless it is torn down; an enabled unit that can no

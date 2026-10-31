@@ -3,11 +3,44 @@
 - name: Verify @terra bootstrap
   hosts: terra
   gather_facts: false
+  vars:
+    # Absolute path, not PATH: a bootstrapped host may not have the Nix profile
+    # on a bare Ansible shell's PATH (and a path probe says nothing about the
+    # store, which is the thing that broke on 2026-10-11).
+    verify_nix_bin: "/nix/var/nix/profiles/default/bin/nix"
   tasks:
+    - name: Count the Nix store entries
+      ansible.builtin.find:
+        paths: /nix/store
+        file_type: any
+        hidden: true
+        patterns: ["*"]
+      register: verify_nix_store
+      changed_when: false
+
+    - name: Fail when the Nix store is missing or empty
+      ansible.builtin.assert:
+        that:
+          - (verify_nix_store.matched | default(0)) > 0
+        fail_msg: >-
+          /nix/store is missing or empty; a bind mount may be shadowing the
+          store.
+
     - name: Check Nix
-      ansible.builtin.command: "nix --version"
+      ansible.builtin.command: "{{ verify_nix_bin }} --version"
       register: verify_nix
       changed_when: false
+
+    - name: Check the Nix daemon  # noqa: command-instead-of-module
+      ansible.builtin.command: "systemctl is-active nix-daemon.service"
+      register: verify_nix_daemon
+      changed_when: false
+
+    - name: Fail when the Nix daemon is not running
+      ansible.builtin.assert:
+        that:
+          - verify_nix_daemon.stdout | trim == 'active'
+        fail_msg: "nix-daemon.service is not active: {{ verify_nix_daemon.stdout | trim }}"
 
     - name: Check the Docker CLI
       ansible.builtin.command: "docker --version"
@@ -25,5 +58,7 @@
       ansible.builtin.debug:
         msg:
           - "nix:           {{ verify_nix.stdout }}"
+          - "nix store:     {{ verify_nix_store.matched }} paths"
+          - "nix daemon:    {{ verify_nix_daemon.stdout }}"
           - "docker:        {{ verify_docker.stdout }}"
           - "docker daemon: {{ verify_docker_daemon.stdout }}"

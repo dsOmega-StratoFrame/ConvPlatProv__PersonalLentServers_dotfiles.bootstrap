@@ -1,11 +1,71 @@
 ---
-# `command` is a shell builtin; ansible.builtin.command does not invoke a shell,
-# so this always returned rc 2 and Nix was reinstalled on every run.
-- name: Check whether Nix is already installed
-  ansible.builtin.shell: "command -v nix"  # noqa: command-instead-of-shell
-  register: bootstrap_nix_command
+# The install gate is the store, not `command -v nix`. A PATH probe is wrong in
+# both directions: after the 2026-10-11 zterra incident `nix` was gone from PATH
+# while the store still existed on md9 (so a reinstall was attempted), and a
+# `nix` shim on PATH says nothing about whether a usable store is present.
+- name: Count the entries in the Nix store
+  ansible.builtin.find:
+    paths: "{{ bootstrap_nix_store_dir }}"
+    file_type: any
+    hidden: true
+    patterns: ["*"]
+  register: bootstrap_nix_store_entries
   changed_when: false
   failed_when: false
+
+- name: Decide whether the Nix store already exists
+  ansible.builtin.set_fact:
+    bootstrap_nix_installed: "{{ (bootstrap_nix_store_entries.matched | default(0)) > 0 }}"
+
+# A mount over an empty store hides whatever was underneath it: that is exactly
+# how the real store on md9 disappeared behind /zterra/local-/nix. Installing
+# into such a mount would bury the old store again, so fail unless the mount is
+# the configured store location or a clean reinstall was explicitly allowed.
+- name: Read the mount that backs the Nix root
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - -n
+      - -o
+      - TARGET,SOURCE,FSTYPE
+      - --target
+      - "{{ bootstrap_nix_root }}"
+  register: bootstrap_nix_mount
+  changed_when: false
+  failed_when: false
+  when: not bootstrap_nix_installed
+
+- name: Check the empty store sits on the configured bind source
+  ansible.builtin.command:
+    argv:
+      - sh
+      - -c
+      - >-
+        [ "$(stat -c %d:%i {{ bootstrap_nix_root }})"
+        = "$(stat -c %d:%i {{ bootstrap_nix_expected_mount_source }})" ]
+  register: bootstrap_nix_expected_mount_check
+  changed_when: false
+  failed_when: false
+  when:
+    - not bootstrap_nix_installed
+    - bootstrap_nix_expected_mount_source | length > 0
+
+- name: Fail-fast when an empty store is hidden behind a mount
+  ansible.builtin.assert:
+    that:
+      - >-
+        (bootstrap_nix_mount.rc | default(1)) != 0
+        or ((bootstrap_nix_mount.stdout | default('')).split() | first | default('')) != bootstrap_nix_root
+        or (bootstrap_nix_allow_empty_mount | bool)
+        or ((bootstrap_nix_expected_mount_source | length) > 0
+            and (bootstrap_nix_expected_mount_check.rc | default(1)) == 0)
+    fail_msg: >-
+      {{ bootstrap_nix_root }} is a mountpoint ({{ bootstrap_nix_mount.stdout | default('?') }})
+      but {{ bootstrap_nix_store_dir }} is empty. A mount is shadowing the real
+      store. Set bootstrap_nix_allow_empty_mount=true for a deliberate clean
+      reinstall, or set bootstrap_nix_expected_mount_source to the bind source
+      that is supposed to back {{ bootstrap_nix_root }}.
+  when: not bootstrap_nix_installed
 
 # `default(omit, true)` cannot drop a key from `include_role: vars`: Ansible
 # only strips the `omit` placeholder from *module arguments*, so inside a role
@@ -42,7 +102,7 @@
 # inherited by the included role's tasks, and Ansible applies it inside the
 # module process so it survives danielrolls.nix's task-level `become: true`.
 - name: Install Nix (multi-user, systemd)
-  when: bootstrap_nix_command.rc != 0 or bootstrap_nix_force_reinstall
+  when: not bootstrap_nix_installed or bootstrap_nix_force_reinstall
   environment:
     PATH: "{{ bootstrap_nix_env_path }}"
   block:
@@ -87,6 +147,27 @@
         remove_nix_directory: "{{ bootstrap_nix_remove_nix_directory }}"
         nix_commands: "{{ bootstrap_nix_commands }}"
 
+# The installer reports success before the host is actually usable (on
+# 2026-10-10 the first run died *after* installing at the `nix --version`
+# smoke item). Assert the durable footprint, not the exit code.
+- name: Re-count the Nix store after the install
+  ansible.builtin.find:
+    paths: "{{ bootstrap_nix_store_dir }}"
+    file_type: any
+    hidden: true
+    patterns: ["*"]
+  register: bootstrap_nix_store_after
+  changed_when: false
+  failed_when: false
+
+- name: Assert the Nix store is populated
+  ansible.builtin.assert:
+    that:
+      - (bootstrap_nix_store_after.matched | default(0)) > 0
+    fail_msg: >-
+      {{ bootstrap_nix_store_dir }} is still empty after the install; Nix did
+      not land on the filesystem that will survive the next boot.
+
 - name: Ensure /etc/nix/nix.conf exists
   ansible.builtin.copy:
     content: ""
@@ -114,6 +195,38 @@
   changed_when: false
   environment:
     PATH: "{{ bootstrap_nix_env_path }}"
+
+# The installed unit files are symlinks into the store, so a store moved out
+# from under them leaves dangling links that only fail on the next boot.
+- name: Read the nix-daemon enabled state  # noqa: command-instead-of-module
+  ansible.builtin.command: "systemctl is-enabled nix-daemon.service"
+  register: bootstrap_nix_daemon_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Read the nix-daemon active state  # noqa: command-instead-of-module
+  ansible.builtin.command: "systemctl is-active nix-daemon.service"
+  register: bootstrap_nix_daemon_active
+  changed_when: false
+  failed_when: false
+
+- name: Stat the nix-daemon service unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/nix-daemon.service
+    follow: true
+  register: bootstrap_nix_daemon_unit
+
+- name: Assert the nix-daemon service is installed, enabled and running
+  ansible.builtin.assert:
+    that:
+      - bootstrap_nix_daemon_enabled.stdout | trim == 'enabled'
+      - bootstrap_nix_daemon_active.stdout | trim == 'active'
+      - bootstrap_nix_daemon_unit.stat.exists
+    fail_msg: >-
+      nix-daemon.service is not usable: enabled={{ bootstrap_nix_daemon_enabled.stdout | default('?') | trim }},
+      active={{ bootstrap_nix_daemon_active.stdout | default('?') | trim }},
+      unit-resolves={{ bootstrap_nix_daemon_unit.stat.exists }}.
+  when: bootstrap_nix_assert_daemon | bool
 
 - name: Report the installed Nix version
   ansible.builtin.debug:

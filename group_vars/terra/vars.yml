@@ -79,6 +79,10 @@ bootstrap_nix_version: ""
 bootstrap_nix_installer_checksum: ""
 bootstrap_nix_flakes: true
 bootstrap_nix_trusted_users: "root terra"
+# The store must live on the zterra bind. If /nix is a mountpoint over an empty
+# store and it is not this source, the role fails instead of installing into a
+# shadowing mount (2026-10-11 incident).
+bootstrap_nix_expected_mount_source: "{{ zterra_root }}/local-/nix"
 
 # bootstrap_docker — detect the TOS-provided Docker, install CE only if missing.
 bootstrap_docker_install_method: "detect"
@@ -151,7 +155,9 @@ zterra_layout_directories:
 zterra_binds_mounts:
   - source: "{{ zterra_root }}/local-/nix"
     target: "/nix"
-    before: "nix-daemon.service"
+    # Order both units: the socket is enabled too, and a socket started before
+    # the bind serves a /nix that does not exist yet.
+    before: "nix-daemon.service nix-daemon.socket"
   - source: "{{ zterra_root }}/local-/var-/tmp"
     target: "/tmp"
     replace: true

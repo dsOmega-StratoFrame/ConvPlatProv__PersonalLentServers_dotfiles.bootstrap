@@ -117,7 +117,10 @@ def test_terra_binds_are_nix_and_tmp_only_after_d_log():
     """
     binds = {b["target"]: b for b in load(TERRA_VARS)["zterra_binds_mounts"]}
     assert set(binds) == {"/nix", "/tmp"}
-    assert binds["/nix"]["before"] == "nix-daemon.service"
+    # Both daemon units read /nix; a socket started before the bind serves a
+    # store that is not there yet.
+    assert "nix-daemon.service" in binds["/nix"]["before"]
+    assert "nix-daemon.socket" in binds["/nix"]["before"]
     # /tmp replaces the active tmpfs tmp.mount, so it must be restarted.
     assert binds["/tmp"]["replace"] is True
 
@@ -300,6 +303,37 @@ def test_binds_swap_keeps_module_payload_off_tmp():
     default = load(BINDS_DEFAULTS)["zterra_binds_module_tmpdir"]
     assert default.startswith("/")
     assert not default.startswith("/tmp")
+
+
+def test_binds_refuse_to_shadow_a_non_empty_target():
+    """2026-10-11: an empty subvolume bound over /nix hid the real store. The
+    role must refuse to bind over content unless replace/allow_shadow says so.
+    """
+    tasks = load(BINDS_TASKS)
+    check = _find_task(tasks, "would shadow existing content")
+    assert "stat -c %d:%i" in str(check["ansible.builtin.command"])
+    assert "ls -A" in str(check["ansible.builtin.command"])
+    guard = _find_task(tasks, "Fail-closed when a bind would shadow a non-empty target")
+    conditions = " ".join(guard["ansible.builtin.assert"]["that"])
+    assert "item.rc == 0" in conditions
+    assert "replace" in conditions
+    assert "allow_shadow" in conditions
+    # The guard must run before the unit files are written.
+    assert _task_index(tasks, "would shadow existing content") < _task_index(
+        tasks, "Derive each bind unit name"
+    )
+
+
+def test_binds_verify_the_mount_actually_took_effect():
+    """A started unit is not proof: compare device:inode of target and source."""
+    tasks = load(BINDS_TASKS)
+    verify = _find_task(tasks, "Verify each bind target resolves to its source")
+    assert "stat -c %d:%i" in str(verify["ansible.builtin.command"])
+    assert verify["environment"]["TMPDIR"] == "{{ zterra_binds_module_tmpdir }}"
+    assert _task_index(tasks, "Replace a stale mount") < _task_index(
+        tasks, "Verify each bind target resolves to its source"
+    )
+    assert _find_task(tasks, "Fail when a bind target does not resolve to its source")
 
 
 def test_binds_retire_stale_units():
