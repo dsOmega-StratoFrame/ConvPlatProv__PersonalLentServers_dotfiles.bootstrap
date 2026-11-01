@@ -18,7 +18,15 @@ PLAYBOOK ?= HomeServer__HomeAssistant.yml
 VERIFY_PLAYBOOK ?= verify-terra.yml
 INVENTORY ?= hosts.ini
 ANSIBLE_CONFIG ?= ansible.cfg
-ANSIBLE_ROLES_PATH ?= $(CURDIR)/roles
+# Role search path. Deliberately NOT defaulted: ANSIBLE_ROLES_PATH *replaces*
+# Ansible's built-in search path (~/.ansible/roles, /usr/share/ansible/roles,
+# /etc/ansible/roles) instead of extending it, which hid the galaxy role
+# installed by `make install` (danielrolls.nix) and failed the `nix` tag. The
+# repo's own roles are play-level roles and resolve from ./roles next to the
+# playbook, so no override is needed by default. Pass it on the command line (or
+# export it) only to add/replace paths; it is then forwarded as-is.
+ANSIBLE_ROLES_PATH ?=
+ROLES_PATH_ENV = $(if $(strip $(ANSIBLE_ROLES_PATH)),ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) ,)
 COMPOSE ?= tests/integration/docker-compose.yml
 SSH_TARGET ?= terra
 EXTRA_ARGS ?=
@@ -42,16 +50,16 @@ help:
 	@echo "  logs written to $(LOG_DIR)/latest.log (or <timestamp>-<tag>.log)"
 
 run:
-	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
-	$(RUN_LOG) $(LOG_LABEL) ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) $(EXTRA_ARGS) -v
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) $(ROLES_PATH_ENV)$(RUN_LOG) \
+	$(LOG_LABEL) ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) $(EXTRA_ARGS) -v
 
 dry:
-	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
-	$(RUN_LOG) $(LOG_LABEL)-dry ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) --check --diff $(EXTRA_ARGS) -v
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) $(ROLES_PATH_ENV)$(RUN_LOG) \
+	$(LOG_LABEL)-dry ansible-playbook -i $(INVENTORY) $(PLAYBOOK) --tags $(STEP_TAGS) --check --diff $(EXTRA_ARGS) -v
 
 verify:
-	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) ANSIBLE_ROLES_PATH=$(ANSIBLE_ROLES_PATH) \
-	$(RUN_LOG) $(LOG_LABEL)-verify ansible-playbook -i $(INVENTORY) $(VERIFY_PLAYBOOK) $(EXTRA_ARGS) -v
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) $(ROLES_PATH_ENV)$(RUN_LOG) \
+	$(LOG_LABEL)-verify ansible-playbook -i $(INVENTORY) $(VERIFY_PLAYBOOK) $(EXTRA_ARGS) -v
 
 up:
 	docker compose -f $(COMPOSE) up -d --build

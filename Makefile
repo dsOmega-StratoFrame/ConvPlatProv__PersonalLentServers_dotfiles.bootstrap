@@ -59,8 +59,13 @@ unit:
 it-up:
 	docker compose -f tests/integration/docker-compose.yml up -d --build
 
+# The integration playbook does not live at the repo root, so the roles next to
+# it (tests/integration/roles) are not the repo's roles: this target must state
+# the path. It also appends the user roles dir so a `make install`-ed galaxy
+# role (danielrolls.nix) still resolves. An explicit ANSIBLE_ROLES_PATH wins.
 it-run:
-	ANSIBLE_CONFIG=ansible.cfg ANSIBLE_ROLES_PATH=$(CURDIR)/roles \
+	ANSIBLE_CONFIG=ansible.cfg \
+	ANSIBLE_ROLES_PATH=$(if $(strip $(ANSIBLE_ROLES_PATH)),$(ANSIBLE_ROLES_PATH),$(CURDIR)/roles:$(HOME)/.ansible/roles) \
 	$(RUN_LOG) integration ansible-playbook -i tests/integration/inventory.ini tests/integration/playbook.yml -v
 
 it-shell:
