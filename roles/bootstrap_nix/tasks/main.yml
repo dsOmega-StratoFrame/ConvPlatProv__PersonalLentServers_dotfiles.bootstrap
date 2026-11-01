@@ -139,13 +139,156 @@
         state: link
         force: true
 
-    - name: Install Nix via the pinned role
-      ansible.builtin.include_role:
-        name: danielrolls.nix
-      vars:
-        flakes: "{{ bootstrap_nix_flakes }}"
-        remove_nix_directory: "{{ bootstrap_nix_remove_nix_directory }}"
-        nix_commands: "{{ bootstrap_nix_commands }}"
+    - name: Run the pinned Nix installer with TOS rescue
+      block:
+        - name: Install Nix via the pinned role
+          ansible.builtin.include_role:
+            name: danielrolls.nix
+          vars:
+            flakes: "{{ bootstrap_nix_flakes }}"
+            remove_nix_directory: "{{ bootstrap_nix_remove_nix_directory }}"
+            nix_commands: "{{ bootstrap_nix_commands }}"
+      rescue:
+        - name: Stat the installed Nix profile binary
+          ansible.builtin.stat:
+            path: "{{ bootstrap_nix_profile_bin }}"
+          register: bootstrap_nix_profile_bin_stat
+
+        - name: Fail when the installer really failed
+          ansible.builtin.fail:
+            msg: >-
+              The pinned Nix installer failed and
+              {{ bootstrap_nix_profile_bin }} is missing, so this is not the
+              TOS uid-0 ownership trap:
+              {{ ansible_failed_result.msg | default(ansible_failed_result) }}
+          when: not bootstrap_nix_profile_bin_stat.stat.exists
+
+        - name: Warn that the installer exited non-zero and the rescue treated it as the TOS trap
+          ansible.builtin.debug:
+            msg: >-
+              The pinned Nix installer exited non-zero
+              ({{ ansible_failed_result.msg | default(ansible_failed_result) }}).
+              {{ bootstrap_nix_profile_bin }} exists, so the rescue is treating
+              this as the known TOS 6 uid-0 ownership trap and repairing the
+              /nix ownership and nix-daemon units.
+
+        - name: Resolve the nixbld group id
+          ansible.builtin.command:
+            argv:
+              - getent
+              - group
+              - nixbld
+          register: bootstrap_nix_nixbld_group
+          changed_when: false
+          failed_when: false
+
+        - name: Parse the nixbld group id
+          ansible.builtin.set_fact:
+            bootstrap_nix_nixbld_gid: >-
+              {{ (bootstrap_nix_nixbld_group.stdout | default('')).split(':')[2] | default('') }}
+
+        - name: Assert the nixbld group id is numeric
+          ansible.builtin.assert:
+            that:
+              - bootstrap_nix_nixbld_group.rc | default(1) == 0
+              - bootstrap_nix_nixbld_gid is match('^[0-9]+$')
+            fail_msg: >-
+              Could not resolve a numeric gid from `getent group nixbld`:
+              rc={{ bootstrap_nix_nixbld_group.rc | default('?') }},
+              stdout={{ bootstrap_nix_nixbld_group.stdout | default('') | trim }}.
+            quiet: true
+
+        - name: Read the current ownership of /nix
+          ansible.builtin.command:
+            argv:
+              - stat
+              - -c
+              - "%u:%g"
+              - /nix
+          register: bootstrap_nix_current_owner
+          changed_when: false
+
+        - name: Fix ownership of /nix to uid 0 and the nixbld gid
+          ansible.builtin.command:
+            argv:
+              - chown
+              - -R
+              - "0:{{ bootstrap_nix_nixbld_gid }}"
+              - /nix
+          when: >-
+            (bootstrap_nix_current_owner.stdout | trim) != ('0:' ~ bootstrap_nix_nixbld_gid)
+          changed_when: >-
+            (bootstrap_nix_current_owner.stdout | trim) != ('0:' ~ bootstrap_nix_nixbld_gid)
+
+        - name: Reconcile /nix/var ownership with systemd-tmpfiles
+          ansible.builtin.command:
+            argv:
+              - systemd-tmpfiles
+              - --create
+              - --prefix=/nix/var/nix
+          changed_when: true
+
+        - name: Read the nix-daemon service enablement during rescue  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv:
+              - systemctl
+              - is-enabled
+              - nix-daemon.service
+          register: bootstrap_nix_rescue_service_enabled
+          changed_when: false
+          failed_when: false
+
+        - name: Link the nix-daemon service unit  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv:
+              - systemctl
+              - link
+              - "{{ bootstrap_nix_profile_dir }}/lib/systemd/system/nix-daemon.service"
+          when: bootstrap_nix_rescue_service_enabled.stdout | trim not in ['enabled', 'linked']
+          changed_when: true
+
+        - name: Read the nix-daemon socket enablement during rescue  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv:
+              - systemctl
+              - is-enabled
+              - nix-daemon.socket
+          register: bootstrap_nix_rescue_socket_enabled
+          changed_when: false
+          failed_when: false
+
+        - name: Enable the nix-daemon socket unit  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv:
+              - systemctl
+              - enable
+              - "{{ bootstrap_nix_profile_dir }}/lib/systemd/system/nix-daemon.socket"
+          when: bootstrap_nix_rescue_socket_enabled.stdout | trim != 'enabled'
+          changed_when: true
+
+        - name: Reload systemd after linking the nix-daemon units  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv:
+              - systemctl
+              - daemon-reload
+          changed_when: false
+
+        - name: Enable and start the nix-daemon socket  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv:
+              - systemctl
+              - enable
+              - --now
+              - nix-daemon.socket
+          changed_when: true
+
+        - name: Restart the nix-daemon service  # noqa: command-instead-of-module
+          ansible.builtin.command:
+            argv:
+              - systemctl
+              - restart
+              - nix-daemon.service
+          changed_when: true
 
 # The installer reports success before the host is actually usable (on
 # 2026-10-10 the first run died *after* installing at the `nix --version`
@@ -196,11 +339,85 @@
   environment:
     PATH: "{{ bootstrap_nix_env_path }}"
 
+- name: Ping the Nix store through the profile binary
+  ansible.builtin.command:
+    argv:
+      - "{{ bootstrap_nix_profile_bin }}"
+      - store
+      - ping
+  register: bootstrap_nix_store_ping
+  changed_when: false
+  failed_when: false
+
+- name: Read the Nix version through the profile binary
+  ansible.builtin.command:
+    argv:
+      - "{{ bootstrap_nix_profile_bin }}"
+      - --version
+  register: bootstrap_nix_profile_version
+  changed_when: false
+  failed_when: false
+
+- name: Assert nix store ping and nix --version succeed through the profile binary
+  ansible.builtin.assert:
+    that:
+      - bootstrap_nix_store_ping.rc | default(1) == 0
+      - bootstrap_nix_profile_version.rc | default(1) == 0
+    fail_msg: >-
+      `nix store ping` (rc {{ bootstrap_nix_store_ping.rc | default('?') }})
+      or `nix --version` (rc {{ bootstrap_nix_profile_version.rc | default('?') }})
+      failed via {{ bootstrap_nix_profile_bin }}; stderr:
+      {{ bootstrap_nix_store_ping.stderr | default('') | trim }}
+      {{ bootstrap_nix_profile_version.stderr | default('') | trim }}
+
+- name: Read the device id of /nix
+  ansible.builtin.command:
+    argv:
+      - stat
+      - -c
+      - "%d"
+      - "{{ bootstrap_nix_root }}"
+  register: bootstrap_nix_root_device
+  changed_when: false
+  failed_when: false
+
+- name: Read the device id of the expected Nix mount source
+  ansible.builtin.command:
+    argv:
+      - stat
+      - -c
+      - "%d"
+      - "{{ bootstrap_nix_expected_mount_source }}"
+  register: bootstrap_nix_expected_mount_device
+  changed_when: false
+  failed_when: false
+  when: bootstrap_nix_expected_mount_source | length > 0
+
+- name: Assert /nix and the expected mount source are on the same filesystem
+  ansible.builtin.assert:
+    that:
+      - bootstrap_nix_root_device.rc | default(1) == 0
+      - bootstrap_nix_expected_mount_device.rc | default(1) == 0
+      - (bootstrap_nix_root_device.stdout | trim) == (bootstrap_nix_expected_mount_device.stdout | trim)
+    fail_msg: >-
+      {{ bootstrap_nix_root }} (device
+      {{ bootstrap_nix_root_device.stdout | default('?') | trim }}) and
+      {{ bootstrap_nix_expected_mount_source }} (device
+      {{ bootstrap_nix_expected_mount_device.stdout | default('?') | trim }})
+      are on different filesystems; Nix is not on the durable bind.
+  when: bootstrap_nix_expected_mount_source | length > 0
+
 # The installed unit files are symlinks into the store, so a store moved out
 # from under them leaves dangling links that only fail on the next boot.
 - name: Read the nix-daemon enabled state  # noqa: command-instead-of-module
   ansible.builtin.command: "systemctl is-enabled nix-daemon.service"
   register: bootstrap_nix_daemon_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Read the nix-daemon socket enabled state  # noqa: command-instead-of-module
+  ansible.builtin.command: "systemctl is-enabled nix-daemon.socket"
+  register: bootstrap_nix_daemon_socket_enabled
   changed_when: false
   failed_when: false
 
@@ -219,11 +436,13 @@
 - name: Assert the nix-daemon service is installed, enabled and running
   ansible.builtin.assert:
     that:
-      - bootstrap_nix_daemon_enabled.stdout | trim == 'enabled'
+      - bootstrap_nix_daemon_enabled.stdout | trim in ['enabled', 'linked']
+      - bootstrap_nix_daemon_socket_enabled.stdout | trim == 'enabled'
       - bootstrap_nix_daemon_active.stdout | trim == 'active'
       - bootstrap_nix_daemon_unit.stat.exists
     fail_msg: >-
       nix-daemon.service is not usable: enabled={{ bootstrap_nix_daemon_enabled.stdout | default('?') | trim }},
+      socket={{ bootstrap_nix_daemon_socket_enabled.stdout | default('?') | trim }},
       active={{ bootstrap_nix_daemon_active.stdout | default('?') | trim }},
       unit-resolves={{ bootstrap_nix_daemon_unit.stat.exists }}.
   when: bootstrap_nix_assert_daemon | bool

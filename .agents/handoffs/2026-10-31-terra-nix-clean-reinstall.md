@@ -5,7 +5,24 @@
 - Orchestrator record: Logseq `ai-orc Orchestrator_system/NIX-TERRA-001 orchestration-record`
 - Repo: `PersonalLentServers%Russian_dotfiles.bootstrap`
 - Target: inventory host `terra-local` (TOS 6 NAS; ssh user `terra`, uid 0)
-- Status: **approved, not executed**
+- Status: **Phase 0 executed 2026-10-31; Phase 1 hit the TOS uid trap; host repaired manually; Phase 1b (role repair via Ansible) pending**
+
+> **EXECUTED 2026-10-31 19:26 MSK.** Phase 0 ran via
+> `make run-log LOG_LABEL=teardown CMD='ssh terra@terra-local bash -s'`.
+> Log: `logs/20261031T192652-teardown.log` (exit 0).
+>
+> The earlier WAN outage was transient: reachability was re-verified 3×200 to
+> `releases.nixos.org` (plus `cache.nixos.org` 200) immediately before the
+> teardown and 200 again after it.
+>
+> State after Phase 0 (verified): `/nix` is no longer a mountpoint and is empty
+> on `/dev/md9`; `/zterra/local-/nix` is empty; no `nix-daemon` process;
+> `nix.mount` and the dangling `nix-daemon` unit symlinks are gone.
+>
+> **Phase 1 may run** (`--tags binds`, then `make -f Makefile.NixBootstrap run`).
+> Re-check `curl -4 -sS -o /dev/null -w '%{http_code}\n' https://releases.nixos.org/`
+> immediately before the nix run. Use `-4`: the NAS has no global IPv6 route,
+> so an unqualified `curl` can pick a dead AAAA path.
 
 ## Why
 
@@ -44,9 +61,17 @@ Not allowed:
   not, `make install` (network).
 - `.vault_pass.py` present and able to decrypt `group_vars/terra/vault`
   (do not print the file or the vault).
+- Do **not** set `ANSIBLE_ROLES_PATH` for the repo playbooks. It replaces
+  Ansible's built-in search path (`~/.ansible/roles`, `/usr/share/ansible/roles`,
+  `/etc/ansible/roles`) instead of extending it, which hides the
+  `danielrolls.nix` installed by `make install`. The Makefiles forward it only
+  when you set it; the repo's own roles resolve from `./roles` next to the
+  playbook.
 - SSH: `ssh terra@terra-local 'id -u'` prints `0`.
-- Host can reach `releases.nixos.org` and `cache.nixos.org` (verified 2026-10-31:
-  HTTP 200). Re-check with `curl -sS -o /dev/null -w '%{http_code}\n' URL`.
+- Host can reach `releases.nixos.org` and `cache.nixos.org`. Re-check **on the
+  host**, immediately before Phase 0:
+  `curl -sS -o /dev/null -w '%{http_code}\n' https://releases.nixos.org/`.
+  At 2026-10-31 this check failed (no WAN egress); see the block above.
 
 If any precondition fails, stop and report; do not improvise.
 
@@ -105,9 +130,10 @@ From the repo root on the control node:
 ANSIBLE_CONFIG=ansible.cfg ansible-playbook -i hosts.ini \
   HomeServer__HomeAssistant.yml --syntax-check
 
-# 1.2 recreate nix.mount only (zterra_mount/layout are already converged)
-ANSIBLE_CONFIG=ansible.cfg ANSIBLE_ROLES_PATH="$PWD/roles" \
-  ansible-playbook -i hosts.ini HomeServer__HomeAssistant.yml --tags binds -v
+# 1.2 recreate nix.mount only (zterra_mount/layout are already converged).
+# STEP_TAGS must be given: Makefile.Zterra defaults it to `zterra`, which would
+# also run zterra_mount, zterra_layout and zterra_docker_data (out of scope).
+make -f Makefile.Zterra run STEP_TAGS=binds INVENTORY=hosts.ini
 
 # 1.3 /nix must now be the zterra subvolume and empty
 ssh terra@terra-local 'findmnt -T /nix -o TARGET,SOURCE,FSTYPE; stat -c "%d %n" /nix /zterra/local-/nix'
@@ -116,6 +142,15 @@ ssh terra@terra-local 'findmnt -T /nix -o TARGET,SOURCE,FSTYPE; stat -c "%d %n" 
 make -f Makefile.NixBootstrap run
 # equivalent: ansible-playbook -i hosts.ini HomeServer__HomeAssistant.yml --tags nix -v
 ```
+
+> **Working tree carries the hardening (2026-10-31).** The checkout now includes
+> F1–F7 (uncommitted): the store-based gate, the empty-mount fail-fast, the
+> post-install asserts, the bind shadow guard and the post-bind identity check.
+> They are compatible with this runbook *in order*: `binds` first (target empty,
+> so the shadow guard passes), then `nix` (mount source is
+> `{{ zterra_root }}/local-/nix`, so the empty-store guard passes).
+> Running the tags in the wrong order would now fail safely instead of silently
+> shadowing the store — that failure is the guard working, not a regression.
 
 ### Known failure mode: capture it, do not hack around it
 
@@ -129,6 +164,116 @@ If the installer completes but the smoke item fails with rc 127:
 - re-run `make -f Makefile.NixBootstrap run` once;
 - record both logs and report it as a finding (role defect F4/F5 below).
 
+## Phase 1b — TOS ownership trap (2026-11-01 run)
+
+The first `make -f Makefile.NixBootstrap run` reached the installer and failed at
+its last step (`logs/20261101T154156-nix.log`, `fatal` at `Run the installer`,
+rc 1). The store and profile were installed; the systemd units were not.
+
+Root cause — TOS 6's `root` account is uid 9999, while uid 0 is `terra`:
+
+```
+getent passwd 0 9999
+  terra:x:0:0:...
+  root:x:9999:9999:...
+stat -c '%u %U %g %G %n' /nix /nix/var /nix/store
+  9999 root 30000 nixbld /nix
+     0 terra    0 terra  /nix/var
+     0 terra 30000 nixbld /nix/store
+```
+
+`install-multi-user:699` runs `chown -R root:nixbld /nix`; the **name** `root`
+resolves to uid 9999, so `/nix` becomes owned by the unprivileged account.
+Directories created afterwards by `install` (run as uid 0 `terra`) stay 0-owned.
+The installer's `systemd-tmpfiles --create --prefix=/nix/var/nix` then refuses
+the 9999 → 0 transition (`uid_unsafe_transition`: only a transition *from* uid 0
+is safe) and aborts before `systemctl link/enable/start`
+(`install-systemd-multi-user.sh:100-124`).
+
+Consequence: on any fresh TOS install the role leaves Nix **installed but
+unmanaged** — no `nix-daemon.service`/`.socket`, no daemon after reboot.
+
+### Current state (manual repair applied 2026-11-01)
+
+Nix 2.34.7 is installed and working: `/nix` and `/zterra/local-/nix` chowned to
+`0:30000` numerically, `systemd-tmpfiles` run, units linked/enabled/started,
+`nix --version` and `nix flake --help` pass. This manual repair is **not** the
+deliverable; the role must do it.
+
+### Task for the Ansible agent
+
+1. Re-run `make -f Makefile.NixBootstrap run`. With the store populated, the
+   store-based gate must skip the installer and the post-install asserts must
+   pass; capture `changed=`/`failed=`. This proves the idempotent path.
+2. Make a fresh TOS install survive the trap. In
+   `roles/bootstrap_nix/tasks/main.yml`, wrap the `danielrolls.nix` include so a
+   failure at the tmpfiles step is recoverable, then repair and finish:
+   - verify `/nix/var/nix/profiles/default/bin/nix` exists; if not, fail and
+     surface the installer output (a real install failure);
+   - `chown -R 0:30000 /nix` — numeric uid/gid; never the name `root`, and never
+     `sudo` (on TOS `sudo` targets uid 9999);
+   - `systemd-tmpfiles --create --prefix=/nix/var/nix`;
+   - ensure the units:
+     `systemctl link <profile>/lib/systemd/system/nix-daemon.service`,
+     `systemctl enable <profile>/lib/systemd/system/nix-daemon.socket`,
+     `systemctl daemon-reload`, `systemctl enable --now nix-daemon.socket`,
+     `systemctl restart nix-daemon.service`;
+   - assert `nix store ping`, `nix --version`, daemon `active`/`enabled`, store
+     non-empty, and `/nix` on the same device as
+     `{{ zterra_root }}/local-/nix`.
+   - Keep every task idempotent (`changed_when`, `creates`, or state checks);
+     derive the gid with `getent group nixbld` instead of hardcoding 30000.
+3. Add unit tests in `tests/unit/test_nix_step.py` for the rescue/repair block
+   and the numeric-ownership rule: assert the chown task does not use the string
+   `root` and does not rely on `become`/sudo.
+4. Report: log paths, recaps, whether the repair block fired on the already-fixed
+   host (it should be a no-op), and the acceptance output.
+
+## Phase 1c — nix-daemon assertion fix (2026-11-01, verified)
+
+The re-run failed at `roles/bootstrap_nix/tasks/main.yml:222`:
+
+```
+bootstrap_nix_daemon_enabled.stdout | trim == 'enabled'
+# enabled=linked, active=active, unit-resolves=True
+```
+
+Verdict (verifier): **assertion bug; the host is healthy.** `systemctl link`
+(what the Nix installer uses for the service) never yields `enabled`; it yields
+`linked` with rc=1. The durable activation path is the **enabled socket**
+(`install-systemd-multi-user.sh:110-124`).
+
+Fix in the role:
+
+```yaml
+# accept the service state as the installer produces it
+- bootstrap_nix_daemon_enabled.stdout | trim in ['enabled', 'linked']
+```
+
+Add a socket probe and require it:
+
+```yaml
+- name: Read the nix-daemon socket enabled state  # noqa: command-instead-of-module
+  ansible.builtin.command: "systemctl is-enabled nix-daemon.socket"
+  register: bootstrap_nix_daemon_socket_enabled
+  changed_when: false
+  failed_when: false
+
+# in the assert:
+- bootstrap_nix_daemon_socket_enabled.stdout | trim == 'enabled'
+```
+
+Update `tests/unit/test_nix_step.py:250-258` to assert the predicate contents
+(accept `linked`, require socket `enabled`), not just task presence.
+
+Do **not** "fix" the host with `systemctl enable` on the service: it would only
+mask the assertion bug and diverge from the installer.
+
+Open risk: the linked unit target lives under the `/nix` bind mount
+(`nix.mount`). Reboot resolvability is unverified; after the next reboot check
+`is-enabled`/`is-active`, and if `not-found`, move `/nix` earlier
+(`local-fs.target`/fstab) or copy the unit files instead of symlinking.
+
 ## Acceptance (all must pass)
 
 ```bash
@@ -138,15 +283,17 @@ ssh terra@terra-local '
   ls /nix/store | wc -l
   /nix/var/nix/profiles/default/bin/nix --version
   /nix/var/nix/profiles/default/bin/nix flake --help >/dev/null && echo FLAKES_OK
-  systemctl is-enabled nix-daemon
-  systemctl is-active nix-daemon
+  systemctl is-enabled nix-daemon.service
+  systemctl is-enabled nix-daemon.socket
+  systemctl is-active nix-daemon.service nix-daemon.socket
   test -e /etc/systemd/system/nix-daemon.service && echo UNIT_RESOLVES
   cat /etc/nix/nix.conf
 '
 ```
 
 Expected: `/nix` on `...nvme-1-part4[/local-/nix]`, `SAME_FS`, store count > 0,
-`nix (Nix) 2.x`, `enabled`, `active`, `UNIT_RESOLVES`.
+`nix (Nix) 2.x`, service `linked`, socket `enabled`, both `active`,
+`UNIT_RESOLVES`.
 
 Idempotence (required):
 
@@ -163,9 +310,10 @@ make -f Makefile.NixBootstrap verify  # nix/docker/daemon report
 - Whether the first install run hit the rc 127 smoke-test issue.
 - Any deviation from this runbook.
 
-## Follow-ups (do not implement here)
+## Follow-ups — implemented 2026-10-31 in the working tree (uncommitted)
 
-Role hardening, for a builder with tests:
+Role hardening, for a builder with tests (all of the below is now in the tree;
+see the Logseq `NIX-TERRA-001` record for file:line evidence):
 
 - store-based install gate instead of `command -v nix`
   (`roles/bootstrap_nix/tasks/main.yml:4-9`);

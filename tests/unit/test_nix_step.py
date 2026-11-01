@@ -76,6 +76,23 @@ def _find_block(tasks: list, needle: str) -> dict:
     raise AssertionError(f"no block containing {needle!r}")
 
 
+def _installer_rescue_block(tasks: list) -> dict:
+    """The block that directly wraps the danielrolls.nix include and has a
+    rescue section."""
+    for task in _iter_tasks(tasks):
+        if "rescue" not in task:
+            continue
+        for child in task.get("block") or []:
+            if not isinstance(child, dict):
+                continue
+            role = child.get("ansible.builtin.include_role") or child.get(
+                "include_role"
+            )
+            if role and role.get("name") == "danielrolls.nix":
+                return task
+    raise AssertionError("danielrolls.nix is not wrapped in a block with rescue")
+
+
 def _include_role_task(tasks: list) -> dict:
     for task in _iter_tasks(tasks):
         role = task.get("ansible.builtin.include_role") or task.get("include_role")
@@ -283,4 +300,206 @@ def test_include_role_runs_inside_the_shim_block():
     """The pinned role must inherit the block's environment (PATH), so the
     include_role has to be nested in the block, not a sibling."""
     block = _find_block(_tasks(), "Install Nix (multi-user, systemd)")
-    assert _include_role_task(_tasks()) in block["block"]
+    assert _include_role_task(_tasks()) in list(_iter_tasks(block["block"]))
+
+
+def test_installer_include_role_is_wrapped_in_a_rescue_block():
+    block = _installer_rescue_block(_tasks())
+    assert "rescue" in block
+    assert any(
+        (child.get("ansible.builtin.include_role") or child.get("include_role") or {}).get(
+            "name"
+        )
+        == "danielrolls.nix"
+        for child in block["block"]
+    )
+
+
+def test_rescue_discriminates_on_the_profile_binary():
+    rescue = _installer_rescue_block(_tasks())["rescue"]
+
+    stat = _find_task(rescue, "Stat the installed Nix profile binary")
+    assert stat["ansible.builtin.stat"]["path"] == "{{ bootstrap_nix_profile_bin }}"
+    assert stat["register"] == "bootstrap_nix_profile_bin_stat"
+
+    fail = _find_task(rescue, "Fail when the installer really failed")
+    assert "ansible_failed_result" in fail["ansible.builtin.fail"]["msg"]
+    assert "not bootstrap_nix_profile_bin_stat.stat.exists" in fail["when"]
+
+    assert _defaults()["bootstrap_nix_profile_bin"] == (
+        "/nix/var/nix/profiles/default/bin/nix"
+    )
+    assert _defaults()["bootstrap_nix_profile_dir"] == (
+        "/nix/var/nix/profiles/default"
+    )
+
+
+def test_rescue_chown_uses_uid_zero_and_the_resolved_gid():
+    rescue = _installer_rescue_block(_tasks())["rescue"]
+    chown = _find_task(rescue, "Fix ownership of /nix")
+    command = chown["ansible.builtin.command"]
+    argv = command["argv"]
+
+    assert argv[:2] == ["chown", "-R"]
+    assert argv[2] == "0:{{ bootstrap_nix_nixbld_gid }}"
+    assert "bootstrap_nix_nixbld_gid" in argv[2]
+    joined = " ".join(str(part) for part in argv)
+    assert "root" not in joined
+    assert "0:" in joined
+
+    for forbidden in ("become", "become_user", "sudo"):
+        assert forbidden not in chown
+    assert "bootstrap_nix_current_owner" in chown["when"]
+    assert chown["changed_when"] == chown["when"]
+
+
+def test_rescue_resolves_nixbld_gid_from_getent():
+    rescue = _installer_rescue_block(_tasks())["rescue"]
+
+    resolve = _find_task(rescue, "Resolve the nixbld group id")
+    assert resolve["ansible.builtin.command"]["argv"] == [
+        "getent",
+        "group",
+        "nixbld",
+    ]
+    assert resolve["changed_when"] is False
+    assert resolve["register"] == "bootstrap_nix_nixbld_group"
+
+    parse = _find_task(rescue, "Parse the nixbld group id")
+    expression = parse["ansible.builtin.set_fact"]["bootstrap_nix_nixbld_gid"]
+    assert ".split(':')[2]" in expression
+
+    numeric = _find_task(rescue, "Assert the nixbld group id is numeric")
+    conditions = "\n".join(numeric["ansible.builtin.assert"]["that"])
+    assert "is match" in conditions
+    assert "30000" not in yaml.safe_dump(rescue)
+
+
+def test_rescue_reconciles_nix_var_with_systemd_tmpfiles():
+    rescue = _installer_rescue_block(_tasks())["rescue"]
+    tmpfiles = _find_task(rescue, "systemd-tmpfiles")
+    assert tmpfiles["ansible.builtin.command"]["argv"] == [
+        "systemd-tmpfiles",
+        "--create",
+        "--prefix=/nix/var/nix",
+    ]
+
+
+def test_rescue_links_service_and_enables_socket_with_state_guards():
+    rescue = _installer_rescue_block(_tasks())["rescue"]
+
+    link = _find_task(rescue, "Link the nix-daemon service unit")
+    link_argv = link["ansible.builtin.command"]["argv"]
+    assert link_argv[:2] == ["systemctl", "link"]
+    assert link_argv[2] == (
+        "{{ bootstrap_nix_profile_dir }}/lib/systemd/system/nix-daemon.service"
+    )
+    assert "bootstrap_nix_rescue_service_enabled" in link["when"]
+    assert "not in ['enabled', 'linked']" in link["when"]
+
+    enable = _find_task(rescue, "Enable the nix-daemon socket unit")
+    enable_argv = enable["ansible.builtin.command"]["argv"]
+    assert enable_argv[:2] == ["systemctl", "enable"]
+    assert enable_argv[2] == (
+        "{{ bootstrap_nix_profile_dir }}/lib/systemd/system/nix-daemon.socket"
+    )
+    assert "bootstrap_nix_rescue_socket_enabled" in enable["when"]
+    assert "!= 'enabled'" in enable["when"]
+
+    reload_task = _find_task(rescue, "Reload systemd")
+    assert reload_task["ansible.builtin.command"]["argv"] == [
+        "systemctl",
+        "daemon-reload",
+    ]
+
+    enable_now = _find_task(rescue, "Enable and start the nix-daemon socket")
+    assert enable_now["ansible.builtin.command"]["argv"] == [
+        "systemctl",
+        "enable",
+        "--now",
+        "nix-daemon.socket",
+    ]
+
+    restart = _find_task(rescue, "Restart the nix-daemon service")
+    assert restart["ansible.builtin.command"]["argv"] == [
+        "systemctl",
+        "restart",
+        "nix-daemon.service",
+    ]
+
+
+def test_post_install_assert_accepts_linked_service_and_requires_socket():
+    daemon = _find_task(
+        _tasks(), "Assert the nix-daemon service is installed, enabled and running"
+    )
+    conditions = "\n".join(daemon["ansible.builtin.assert"]["that"])
+    assert "'linked'" in conditions
+    assert "bootstrap_nix_daemon_socket_enabled" in conditions
+    assert "== 'enabled'" in conditions
+    assert daemon["when"] == "bootstrap_nix_assert_daemon | bool"
+
+
+def test_post_install_socket_probe_exists_and_is_required():
+    probe = _find_task(_tasks(), "Read the nix-daemon socket enabled state")
+    assert probe["ansible.builtin.command"] == "systemctl is-enabled nix-daemon.socket"
+    assert probe["register"] == "bootstrap_nix_daemon_socket_enabled"
+    assert probe["changed_when"] is False
+    assert probe["failed_when"] is False
+
+    daemon = _find_task(
+        _tasks(), "Assert the nix-daemon service is installed, enabled and running"
+    )
+    conditions = "\n".join(daemon["ansible.builtin.assert"]["that"])
+    assert "bootstrap_nix_daemon_socket_enabled.stdout | trim == 'enabled'" in (
+        conditions
+    )
+
+
+def test_post_install_assert_requires_nix_store_ping_and_version():
+    ping = _find_task(_tasks(), "Ping the Nix store through the profile binary")
+    assert ping["ansible.builtin.command"]["argv"] == [
+        "{{ bootstrap_nix_profile_bin }}",
+        "store",
+        "ping",
+    ]
+    assert ping["register"] == "bootstrap_nix_store_ping"
+
+    version = _find_task(_tasks(), "Read the Nix version through the profile binary")
+    assert version["ansible.builtin.command"]["argv"] == [
+        "{{ bootstrap_nix_profile_bin }}",
+        "--version",
+    ]
+    assert version["register"] == "bootstrap_nix_profile_version"
+
+    smoke = _find_task(
+        _tasks(), "Assert nix store ping and nix --version succeed"
+    )
+    conditions = "\n".join(smoke["ansible.builtin.assert"]["that"])
+    assert "bootstrap_nix_store_ping.rc" in conditions
+    assert "bootstrap_nix_profile_version.rc" in conditions
+    assert "nix store ping" in (
+        smoke["name"] + smoke["ansible.builtin.assert"]["fail_msg"]
+    )
+
+
+def test_post_install_asserts_the_expected_mount_device_when_configured():
+    root = _find_task(_tasks(), "Read the device id of /nix")
+    assert root["ansible.builtin.command"]["argv"] == [
+        "stat",
+        "-c",
+        "%d",
+        "{{ bootstrap_nix_root }}",
+    ]
+    source = _find_task(
+        _tasks(), "Read the device id of the expected Nix mount source"
+    )
+    assert source["ansible.builtin.command"]["argv"][-1] == (
+        "{{ bootstrap_nix_expected_mount_source }}"
+    )
+    check = _find_task(
+        _tasks(), "Assert /nix and the expected mount source are on the same filesystem"
+    )
+    conditions = "\n".join(check["ansible.builtin.assert"]["that"])
+    assert "bootstrap_nix_root_device.stdout" in conditions
+    assert "bootstrap_nix_expected_mount_device.stdout" in conditions
+    assert check["when"] == "bootstrap_nix_expected_mount_source | length > 0"

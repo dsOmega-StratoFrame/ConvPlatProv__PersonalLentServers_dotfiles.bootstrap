@@ -377,6 +377,30 @@ def test_omit_is_not_used_in_role_include_vars():
     )
 
 
+STEPS_MAKEFILE = REPO / "Makefile.Steps"
+
+
+def test_step_makefile_does_not_replace_the_default_roles_path():
+    """ANSIBLE_ROLES_PATH *replaces* Ansible's built-in search path
+    (~/.ansible/roles, /usr/share/ansible/roles, /etc/ansible/roles) instead of
+    extending it. Defaulting it to ./roles hid a `make install`-ed
+    danielrolls.nix and failed the `nix` tag. It must only be forwarded when the
+    caller sets it."""
+    text = STEPS_MAKEFILE.read_text()
+    assert "$(CURDIR)/roles" not in text, (
+        "Makefile.Steps must not default ANSIBLE_ROLES_PATH to ./roles"
+    )
+    assert re.search(r"^ANSIBLE_ROLES_PATH\s*\?=\s*$", text, re.MULTILINE), (
+        "ANSIBLE_ROLES_PATH must default to empty (use Ansible's search path)"
+    )
+    assert "ROLES_PATH_ENV = $(if $(strip $(ANSIBLE_ROLES_PATH))" in text, (
+        "the role path must be forwarded only when explicitly set"
+    )
+    for target in ("run:", "dry:", "verify:"):
+        block = text.split(target, 1)[1].split("\n\n", 1)[0]
+        assert "$(ROLES_PATH_ENV)" in block, f"{target} does not forward the override"
+
+
 TOP_LEVEL_FACT_RE = re.compile(
     r"\bansible_(os_family|distribution|distribution_major_version|"
     r"distribution_release|pkg_mgr|date_time|architecture|system|hostname|"
