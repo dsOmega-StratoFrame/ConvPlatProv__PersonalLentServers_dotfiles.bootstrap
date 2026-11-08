@@ -311,6 +311,12 @@
       {{ bootstrap_nix_store_dir }} is still empty after the install; Nix did
       not land on the filesystem that will survive the next boot.
 
+- name: Ensure the per-user Nix profile parent directory exists
+  ansible.builtin.file:
+    path: "{{ bootstrap_nix_user_profiles_dir }}"
+    state: directory
+    mode: "0755"
+
 - name: Ensure /etc/nix/nix.conf exists
   ansible.builtin.copy:
     content: ""

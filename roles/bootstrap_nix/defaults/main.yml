@@ -31,7 +31,18 @@ bootstrap_nix_profile_bin: "/nix/var/nix/profiles/default/bin/nix"
 bootstrap_nix_profile_bin_dirs:
   - "/nix/var/nix/profiles/default/bin"
   - "{{ ansible_facts['user_dir'] | default('/root') }}/.nix-profile/bin"
-  - "{{ ansible_facts['user_dir'] | default('/root') }}/.local/state/nix/profile/bin"
+  - "{{ ansible_facts['user_dir'] | default('/root') }}/.local/state/nix/profiles/profile/bin"
+# `nix-env -p` (home-manager activation via deploy-rs) creates the profile
+# symlink and generation links but not the parent. On a fresh host the XDG
+# state tree does not exist, so activation and rollback fail on the lock file.
+# Create the parent as the connecting user; override if deploy-rs pins a path.
+bootstrap_nix_user_profiles_dir: >-
+  {{
+    (ansible_facts['env']['XDG_STATE_HOME'] | default('', true) | length > 0)
+    | ternary(
+        ((ansible_facts['env']['XDG_STATE_HOME'] | default('')) ~ '/nix/profiles'),
+        ((ansible_facts['user_dir'] | default('/root')) ~ '/.local/state/nix/profiles'))
+  }}
 bootstrap_nix_env_path: >-
   {{
     ([bootstrap_nix_install_shim_dir] + bootstrap_nix_profile_bin_dirs
