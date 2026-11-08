@@ -63,6 +63,41 @@ The playbook runs these roles in order:
    independent of the NixOS system-container image, which is imported as a
    prebuilt tar.
 
+The play also runs the `zterra_*` roles: `zterra_mount` → `zterra_layout` →
+`zterra_binds` between `bootstrap_base` and `bootstrap_nix`, and
+`zterra_docker_data` after `bootstrap_docker`. The NVMe namespace has to exist
+before Nix or Docker writes to it, so this order is deliberate.
+
+#### `/tmp` and the TOS log tree
+
+`/tmp` is not a RAM disk in this deployment. `zterra_binds` replaces TOS's
+vendor tmpfs with a noCoW btrfs subvolume (`/zterra/local-/var-/tmp`), and
+`/nix` likewise lives on the NVMe (`/zterra/local-/nix`). This keeps the high
+churn off the ~7.5 GiB md9 root while preserving the noCoW (`chattr +C`)
+behaviour; per-container `/tmp` mounts keep their own tmpfs.
+
+`/var/log` on TOS is a symlink to `/tmp/log`, so every service log follows
+`/tmp` onto zterra (D-LOG). TOS declares the directories under `/tmp` in
+`/usr/lib/tmpfiles.d/tmp.conf`, including `/tmp/log/postgresql` owned by
+`postgres`. `systemd-tmpfiles-setup.service` runs that config once per boot
+against whichever `/tmp` is live at the time, so when the bind is installed or
+replaced later, the skeleton is missing from the persistent subvolume.
+PostgreSQL 13 then fails to start: `pg_ctlcluster` cannot open its log file
+under `/var/log/postgresql`, so the `Type=forking` unit never gets a PID (the
+`-`-prefixed `chown` of the same path is non-fatal and misleading). TOS web
+login, which resolves accounts from PostgreSQL, then returns `invalid user`.
+That was the November 2026 outage.
+
+`zterra_binds` therefore seeds the skeleton as part of the role (right after the
+bind is proven to resolve to its source) and installs
+`zterra-tmp-skeleton.service`, a oneshot ordered `After=tmp.mount`,
+`PartOf=tmp.mount` and `Before=postgresql.service postgresql@13-main.service`,
+so the directories exist on every boot and after any bind swap. The role
+refuses to run the TOS config if a future update activates a destructive
+`D /tmp` line. Seeding is inert by default
+(`zterra_binds_tmp_skeleton_enabled`) because a non-TOS host's `tmp.conf` may
+contain that line; `group_vars/terra/vars.yml` enables it.
+
 ### Prerequisites on `@terra`
 
 Before the first run, on the NAS:
@@ -228,7 +263,9 @@ Roles, in order, by tag:
   strategy`): `zterra_mount` (mount the NVMe btrfs at `/zterra`) →
   `zterra_layout` (the `local-/ shared-/ var-` tree + noCoW subvolumes, with
   free-space / root-mount guards) → `zterra_binds` (`/nix`, `/tmp`; D-LOG —
-  `/var/log` is a TOS symlink to `/tmp/log`, so logs ride the `/tmp` bind) →
+  `/var/log` is a TOS symlink to `/tmp/log`, so logs ride the `/tmp` bind and
+  the TOS temp skeleton from `tmpfiles.d/tmp.conf` is seeded into the bound
+  subvolume on every boot) →
   `zterra_docker_data` (Docker's `data-root` **and** containerd's image-store
   root on zterra; Docker Engine 29+ keeps images/snapshots in containerd, which
   `data-root` does not relocate).
@@ -353,7 +390,7 @@ roles/bootstrap_nix/            # Nix (multi-user)
 roles/bootstrap_docker/         # Docker detection / install
 roles/zterra_mount/             # mount the NVMe btrfs at /zterra (systemd .mount)
 roles/zterra_layout/            # local-/ shared-/ var- tree + noCoW subvolumes
-roles/zterra_binds/             # bind /nix + /tmp onto zterra (D-LOG: logs ride /tmp)
+roles/zterra_binds/             # bind /nix + /tmp; seed the TOS temp skeleton in the /tmp bind
 roles/zterra_docker_data/       # Docker data-root + containerd image store on zterra
 roles/nixos_image_artifact/     # locate + checksum the image on the control node
 roles/nixos_image_sync/         # rsync the artifact to @terra

@@ -8,6 +8,7 @@
     # on a bare Ansible shell's PATH (and a path probe says nothing about the
     # store, which is the thing that broke on 2026-10-11).
     verify_nix_bin: "/nix/var/nix/profiles/default/bin/nix"
+    verify_nix_user_profiles: "/home/terra/.local/state/nix/profiles"
   tasks:
     - name: Count the Nix store entries
       ansible.builtin.find:
@@ -30,6 +31,19 @@
       ansible.builtin.command: "{{ verify_nix_bin }} --version"
       register: verify_nix
       changed_when: false
+
+    - name: Check the per-user Nix profile parent
+      ansible.builtin.stat:
+        path: "{{ verify_nix_user_profiles }}"
+      register: verify_nix_user_profiles_stat
+
+    - name: Fail when the per-user Nix profile parent is missing
+      ansible.builtin.assert:
+        that:
+          - verify_nix_user_profiles_stat.stat.isdir
+        fail_msg: >-
+          {{ verify_nix_user_profiles }} is missing; home-manager activation
+          (`nix-env -p ... --set`) will fail on its lock file.
 
     - name: Check the Nix daemon  # noqa: command-instead-of-module
       ansible.builtin.command: "systemctl is-active nix-daemon.service"
@@ -59,6 +73,7 @@
         msg:
           - "nix:           {{ verify_nix.stdout }}"
           - "nix store:     {{ verify_nix_store.matched }} paths"
+          - "profile parent: present {{ verify_nix_user_profiles_stat.stat.mode }}"
           - "nix daemon:    {{ verify_nix_daemon.stdout }}"
           - "docker:        {{ verify_docker.stdout }}"
           - "docker daemon: {{ verify_docker_daemon.stdout }}"
