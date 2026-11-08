@@ -1,0 +1,56 @@
+' ============================================================================
+' Deploy_nikolaigogol__AddDependencySystem.puml
+'
+' Purpose : Add a system-level dependency to @NikolaiGogol and activate the
+'           whole NixOS system closure inside the running container.
+' Scope   : Unix_dotfiles flake -> deploy-rs -> NixOS system profile on
+'           NikolaiGogol (the system target, not ds13@NikolaiGogol).
+' Date    : 2026-11-01
+'
+' Invariants:
+'   * The container must already be running and reachable; this scope does
+'     NOT rebuild the container image or recreate the container.
+'   * The whole NixOS system closure changes: systemd units, system
+'     packages, and any home-manager profile bundled into that closure.
+'   * deploy-rs copies the closure, runs a dry pass, then activates;
+'     activation sets the system profile and runs switch-to-configuration.
+'   * System-only packages belong here, never on @terra (TOS 6), which has
+'     only a home-manager-compatible user layer.
+'   * DEPLOY_HOST is not used here: the target is the NixOS host alias
+'     NikolaiGogol. hosts.ini is still authoritative for that entry.
+'
+' Render: plantuml -tpng -tsvg docs/_diagrams/Deploy_nikolaigogol__AddDependencySystem.puml
+' ============================================================================
+
+@startuml
+!include _shared/DeployCommon.puml
+autonumber
+title Add a system dependency to the @NikolaiGogol NixOS system
+
+actor Operator
+participant "Terra (TOS 6)\nDocker host" as Terra
+participant "NikolaiGogol\nNixOS container\nsshd :2223" as NG
+participant "Unix_dotfiles\nflake + deploy-rs" as Dotfiles
+participant "Control node\nnix / deploy-rs" as Control
+participant "System profile\n/run/current-system" as Sys
+
+$ContainerReachable(Operator, Terra, NG, "ssh -p 2223 ds13@terra-local true\n(or docker exec HomeServer__HomeAssistant.NikolaiGogol true)")
+
+$DeclareDependency(Operator, Dotfiles, "the NikolaiGogol NixOS system module")
+
+$DeployRs(Operator, Dotfiles, Control, NG, Sys, "set system profile + switch-to-configuration\n(recreate affected systemd services)", "NixOS system closure", "deploy .#nixosConfigurations.NikolaiGogol\n--target-host NikolaiGogol")
+note over Dotfiles, Sys
+  What changes: the whole system closure (systemd
+  units, system packages, bundled profiles).
+  What does not: the container image/rootfs and the
+  container identity; this is an in-place switch.
+end note
+
+$Verify(Operator, NG, "nixos-version; systemctl is-system-running", "readlink -f /run/current-system")
+note right of NG
+  The system profile points at the new generation;
+  the container was not recreated.
+end note
+
+$FailureRollback(Control, NG, "system activation fails", "Select the previous system generation at boot or switch back to it (switch-to-configuration). The container image and its data mounts stay intact.")
+@enduml

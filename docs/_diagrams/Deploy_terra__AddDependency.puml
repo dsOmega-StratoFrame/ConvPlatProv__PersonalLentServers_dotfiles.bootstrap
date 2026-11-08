@@ -1,0 +1,74 @@
+' ============================================================================
+' Deploy_terra__AddDependency.puml
+'
+' Purpose : Add a runtime dependency (e.g. node) to @terra and activate it.
+' Scope   : Layer 0 bootstrap (this repo) -> dependency declaration in
+'           Unix_dotfiles -> deploy-rs copy / dry pass / activate on @terra.
+' Date    : 2026-11-01
+'
+' Invariants:
+'   * bootstrap_nix owns /nix, the nix-daemon units and the per-user XDG
+'     profile parent (~/.local/state/nix/profiles). deploy-rs does not create
+'     that directory; without it activation and rollback fail on the lock file.
+'   * deploy-rs copies the closure over SSH (remote `nix-store --serve`), runs
+'     a dry pass, then activates. Activation is `nix-env -p ... --set` into the
+'     home-manager profile.
+'   * The dependency itself is declared in Unix_dotfiles (home-manager module),
+'     not in this repo. Bootstrap only makes the host able to receive it.
+'   * The remote non-interactive PATH must resolve nix/nix-store for the copy
+'     step (see the R7 blocker: sshd sessions do not source /etc/profile.d).
+'   * @terra runs TOS 6: only home-manager-compatible user packages. There is
+'     no NixOS system layer on @terra; system services stay TOS-native/Docker
+'     or live in the @NikolaiGogol NixOS container.
+'
+' DEPLOY_HOST:
+'   * DEPLOY_HOST=terra-local -> local/debug network, concrete host.
+'   * DEPLOY_HOST=terra      -> production/authoritative target (inventory
+'                               group/alias).
+'   * hosts.ini is the source of truth for the current value; read it instead
+'     of hardcoding either name.
+'
+' Render: plantuml -tpng -tsvg docs/_diagrams/Deploy_terra__AddDependency.puml
+' ============================================================================
+
+@startuml
+!include _shared/DeployCommon.puml
+autonumber
+title Add a dependency (e.g. node) to @terra
+
+actor Operator
+participant "Bootstrap repo\n(this repo)" as Bootstrap
+participant "Unix_dotfiles\nflake + deploy-rs" as Dotfiles
+participant "Control node\nnix / deploy-rs" as Control
+participant "Terra (TOS 6)\nnix-daemon + /nix" as Terra
+participant "HM profile\n&#126;/.local/state/nix/profiles" as HM
+
+$PhaseBootstrap(Operator, Bootstrap, Terra)
+note right of Terra
+  Do not add the dependency before this passes.
+  deploy-rs needs a working `nix-store --serve` and the
+  profile parent for activation.
+end note
+
+$DeclareDependency(Operator, Dotfiles, "the terra home-manager module / flake input")
+note right
+  SKIP_UNRELATED_CHECKS=1 skips checks for
+  other nodes; it does not skip this deploy.
+end note
+
+$DeployRs(Operator, Dotfiles, Control, Terra, HM, "nix-env -p &#126;/.local/state/nix/profiles/home-manager --set [closure]\n(takes home-manager.lock)", "home-manager profile", "make deploy NODE=terra DEPLOY_HOST=[terra-local|terra] SKIP_UNRELATED_CHECKS=1")
+note over Operator, Dotfiles
+  DEPLOY_HOST choice — hosts.ini is authoritative:
+    terra-local = local/debug network (concrete host)
+    terra       = production/authoritative target (inventory group/alias)
+  Read hosts.ini for the up-to-date value; do not hardcode either name.
+end note
+
+$Verify(Operator, Terra, "command -v node; node --version", "readlink -f &#126;/.local/state/nix/profiles/home-manager")
+note right of Terra
+  node is on PATH and the home-manager profile
+  points at the expected generation.
+end note
+
+$FailureRollback(Control, Terra, "activation fails", "Likely causes: missing XDG profile parent, stale home-manager.lock, non-interactive PATH. Fix at Layer 0 (bootstrap_nix); do not patch the flake or pre-create the leaf by hand.")
+@enduml

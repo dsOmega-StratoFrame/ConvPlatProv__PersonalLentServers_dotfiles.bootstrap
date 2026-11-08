@@ -1,0 +1,85 @@
+' ============================================================================
+' NetworkTopology__@terra__@Manilov.puml
+'
+' Purpose : Topology of @terra's two NIC slots, the connected management NIC,
+'           the target bridge, the libvirt-managed tap, the @Manilov virtio
+'           NIC, and the @NikolaiGogol container boundary.
+' Scope   : Evidence snapshot 2026-11-02. Variables only — no concrete IPs.
+'           Values live in the Logseq note:
+'           ai-rsh Researcher_system/MANILOV-MVP-001 @terra network research
+'           (2026.11.02).
+'           The @salt Wi-Fi proxyARP approach is a separate diagram:
+'           NetworkTopology__@salt__@Manilov.puml.
+' Invariants:
+'   * Solid links = observed. Dotted links = candidate / not present.
+'   * ${BRIDGE_NAME}, tap0 and the container are NOT present on @terra today.
+'   * The bridge-attachment choice belongs to the architect; both slots are
+'     drawn so the diagram does not pre-empt that decision.
+'
+' Render: plantuml -tpng -tsvg docs/_diagrams/NetworkTopology__@terra__@Manilov.puml
+' ============================================================================
+
+@startuml
+!include _shared/DeployCommon.puml
+
+title @terra / @Manilov network topology\n(observed 2026-11-02; variables only)
+
+skinparam componentStyle rectangle
+
+cloud "Upstream L2 segment\n${TERRA_LAN_PREFIX}" as LAN
+node "L3 gateway / DHCP server\n${TERRA_GW}\nDNS ${TERRA_DNS}" as GW
+
+node "@terra — TOS 6\nsystemd-networkd" as TERRA {
+  node "PCI slot 02:00.0" as SLOT1 {
+    interface "${TERRA_NIC_1}\npermanent ${TERRA_NIC_1_MAC}\nNO-CARRIER" as NIC1
+  }
+  node "PCI slot 03:00.0" as SLOT2 {
+    interface "${TERRA_NIC_2} = ${TERRA_MGMT_NIC}\n${TERRA_MGMT_MAC}\n${TERRA_MGMT_IP}" as NIC2
+  }
+
+  interface "${BRIDGE_NAME}\n(target; not present)" as BR0
+
+  package "@NikolaiGogol container\nnetwork_mode: host" as NG {
+    node "libvirt\n(in container)" as LIB {
+      interface "tap0\n(libvirt-managed)" as TAP
+    }
+  }
+}
+
+node "@Manilov VM\nHAOS" as MAN {
+  interface "virtio NIC\n${MANILOV_MAC}\n${MANILOV_IP}" as VNIC
+}
+
+GW <--> LAN
+LAN <--> NIC2 : "DHCP / L2"
+NIC2 ..> BR0 : "candidate bridge uplink\n(decision pending)"
+NIC1 ..> BR0 : "spare slot / rescue candidate\n${TERRA_RESCUE_IP} unassigned"
+BR0 <--> TAP
+TAP <--> VNIC : "virtio"
+
+note bottom of TERRA
+  Observed 2026-11-02: no ${BRIDGE_NAME}, no tap0,
+  no virbr*, no libvirt daemon, no container.
+  docker0 (${DOCKER_BRIDGE_IP}) is the only bridge device.
+end note
+
+note bottom of MAN
+  Other approach: @salt uses Wi-Fi proxyARP.
+  See NetworkTopology__@salt__@Manilov.puml.
+end note
+
+note bottom of TERRA
+  Observed 2026-11-02: no ${BRIDGE_NAME}, no tap0,
+  no virbr*, no libvirt daemon, no container.
+  docker0 (${DOCKER_BRIDGE_IP}) is the only bridge device.
+end note
+
+legend right
+  Variables only — no concrete addresses.
+  Values: ai-rsh Researcher_system/
+    MANILOV-MVP-001 @terra network research (2026.11.02)
+  Solid = observed link.
+  Dotted = candidate / not present.
+end legend
+
+@enduml

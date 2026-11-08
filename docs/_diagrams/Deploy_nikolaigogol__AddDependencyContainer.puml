@@ -1,0 +1,67 @@
+' ============================================================================
+' Deploy_nikolaigogol__AddDependencyContainer.puml
+'
+' Purpose : Redeploy the whole @NikolaiGogol container: rebuild the NixOS
+'           image in Unix_dotfiles, then import + recreate it on @terra.
+' Scope   : Unix_dotfiles `make build-NikolaiGogol` -> this repo's
+'           deploy-nikolaigogol.yml (`TAGS=image,container`) on @terra.
+' Date    : 2026-11-01
+'
+' Invariants:
+'   * The container must already be running/reachable for the pre-check, but
+'     this scope replaces the rootfs: both the home-manager profile and the
+'     NixOS system closure come from the newly built image.
+'   * The image is content-addressed (`sha12` of the tarball, ADR 0002);
+'     import + recreate happen only when the tag changes.
+'   * Data is preserved by the bind mounts; the container identity and its
+'     mounts are unchanged, only the image tag moves.
+'   * The play targets @terra (`hosts: terra`), because the Docker host is
+'     the deployment surface, not the container.
+'
+' DEPLOY_HOST TODO:
+'   * deploy-nikolaigogol.yml targets `terra`, so DEPLOY_HOST is currently
+'     the same as the @terra deployment.
+'   * TODO: update DEPLOY_HOST, most likely by adding a direct SSH entry /
+'     alias for @NikolaiGogol. hosts.ini stays authoritative meanwhile.
+'
+' Render: plantuml -tpng -tsvg docs/_diagrams/Deploy_nikolaigogol__AddDependencyContainer.puml
+' ============================================================================
+
+@startuml
+!include _shared/DeployCommon.puml
+autonumber
+title Redeploy the whole @NikolaiGogol container (image + container)
+
+actor Operator
+participant "Terra (TOS 6)\nDocker host" as Terra
+participant "NikolaiGogol\ncontainer\nHomeServer__HomeAssistant.NikolaiGogol" as Container
+participant "Unix_dotfiles\nflake + build" as Dotfiles
+participant "NixOS tarball\ncontent tag sha12" as Artifact
+participant "Ansible\n(this repo)" as Ansible
+
+$ContainerReachable(Operator, Terra, Container, "docker exec HomeServer__HomeAssistant.NikolaiGogol true")
+
+$BuildImage(Operator, Dotfiles, Artifact, "NikolaiGogol")
+note right of Artifact
+  The whole rootfs is rebuilt: home-manager profile
+  and NixOS system closure are baked into the image.
+  Bind-mounted data is not part of the image.
+end note
+
+$AnsibleDeploy(Operator, Ansible, Terra, "image,container", "rsync tarball -> docker import [sha12]\n-> render compose -> docker compose up -d")
+note over Operator, Ansible
+  DEPLOY_HOST TODO — hosts.ini is authoritative.
+  deploy-nikolaigogol.yml targets `hosts: terra`, so DEPLOY_HOST is
+  currently the same as the @terra deployment.
+  TODO: add a direct SSH entry/alias for @NikolaiGogol and revisit
+  DEPLOY_HOST for the container case.
+end note
+
+$Verify(Operator, Terra, "docker image inspect ds-omega/nikolai-gogol:[sha12]", "docker ps --filter name=HomeServer__HomeAssistant.NikolaiGogol")
+note right of Terra
+  Also check `nixos-version` inside the container;
+  the previous image tag remains available for rollback.
+end note
+
+$FailureRollback(Ansible, Terra, "import or compose recreate fails", "Keep the previous content-tagged image and re-run TAGS=container (no rebuild, no re-import). Do not delete the bind-mounted data volumes.")
+@enduml

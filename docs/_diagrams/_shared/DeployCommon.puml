@@ -1,0 +1,108 @@
+' ============================================================================
+' _shared/DeployCommon.puml
+'
+' Purpose : Shared PlantUML theme and phase macros for the deployment sequence
+'           diagrams (Deploy_terra__* and Deploy_nikolaigogol__*).
+' Scope   : Include-only library. It deliberately contains NO @startuml /
+'           @enduml, so `plantuml docs/_diagrams/*.puml` does not render it and
+'           the top-level glob never matches it (it lives in a subdirectory).
+' Date    : 2026-11-01
+'
+' Invariants:
+'   * Scenario files declare participants; macros only draw phases and
+'     messages, so no participant is declared twice after an include.
+'   * Macros never name a concrete host or profile. Target, profile, command
+'     and probe text are parameters, so @terra and @NikolaiGogol reuse one flow.
+'   * DEPLOY_HOST semantics are stated in the scenario note and in
+'     docs/StratoFrame__DeploymentPractices.md, not hardcoded here.
+'
+' Render  : included transitively by each scenario file. No standalone render.
+' ============================================================================
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 220
+skinparam wrapWidth 260
+skinparam ParticipantPadding 12
+skinparam BoxPadding 8
+
+' Phase 0 — Layer 0 bootstrap has made the host able to receive Nix work.
+!procedure $PhaseBootstrap($op, $boot, $host)
+== Phase 0 — target is Nix-ready (once per host, idempotent) ==
+$op -> $boot : make -f Makefile.NixBootstrap run
+$boot -> $host : reconcile Nix\n(store, daemon units, XDG profile parent)
+$host --> $boot : store populated, daemon active\nnix --version; nix store ping
+$boot --> $op : role recap (failed=0, converged)
+!endprocedure
+
+' Precondition — the container must be up and reachable before any Nix work.
+!procedure $ContainerReachable($op, $host, $container, $probe)
+== Precondition — container running and reachable ==
+$op -> $host : docker ps --filter name=$container
+$host --> $op : container up (or fail fast before any Nix work)
+$op -> $container : $probe
+$container --> $op : shell reachable
+!endprocedure
+
+' Phase 1 — the dependency is declared in Unix_dotfiles, never in this repo.
+!procedure $DeclareDependency($op, $dotfiles, $where)
+== Phase 1 — declare the dependency in Unix_dotfiles ==
+$op -> $dotfiles : add the package to $where
+$dotfiles -> $dotfiles : scoped flake check for the target
+!endprocedure
+
+' Phase 1 (container scope) — rebuild the whole NixOS image from Unix_dotfiles.
+!procedure $BuildImage($op, $dotfiles, $artifact, $label)
+== Phase 1 — build the whole image in Unix_dotfiles ==
+$op -> $dotfiles : make build-$label
+$dotfiles -> $artifact : NixOS system tarball\n+ content tag (sha12)
+$artifact --> $op : reproducible artifact + image tag
+!endprocedure
+
+' Phase 2 — deploy-rs copy -> dry pass -> activate, parameterized by target
+' and profile label. $deployCmd carries the scenario's exact command.
+!procedure $DeployRs($op, $dotfiles, $control, $target, $actTarget, $activateCmd, $label, $deployCmd)
+== Phase 2 — deploy-rs: copy, dry pass, activate ($label) ==
+$op -> $dotfiles : $deployCmd
+$dotfiles -> $control : evaluate + build the $label closure
+$control -> $target : nix copy --to ssh://DEPLOY-TARGET\n(remote nix-store --serve)
+$target --> $control : closure present in /nix/store
+$control -> $target : dry pass (no profile switch)
+$target --> $op : activation plan / diff; nothing switched yet
+$control -> $target : activate-rs
+$target -> $actTarget : $activateCmd
+$target -> $target : run the activation script
+$target --> $control : activation OK
+$control --> $dotfiles : deploy result
+!endprocedure
+
+' Phase 2 (container scope) — Ansible deploys image + container through @terra.
+!procedure $AnsibleDeploy($op, $ansible, $host, $tags, $detail)
+== Phase 2 — deploy image + container through Ansible on @terra ==
+$op -> $ansible : ansible-playbook -i hosts.ini deploy-nikolaigogol.yml\n--tags $tags
+$ansible -> $host : $detail
+$host --> $ansible : import + compose result
+$ansible --> $op : play recap (changed/ok)
+!endprocedure
+
+' Phase 3 — the operator checks the live state against the expected generation.
+!procedure $Verify($op, $target, $first, $second)
+== Phase 3 — verify ==
+$op -> $target : $first
+$op -> $target : $second
+$target --> $op : observed state matches the expected generation
+!endprocedure
+
+' Failure path — roll back at the owning scope; never patch around it.
+!procedure $FailureRollback($control, $target, $condition, $note)
+== Failure path ==
+alt $condition
+  $target --> $control : failure reported
+  note right
+    $note
+  end note
+  $control -> $target : rollback at the owning scope
+end
+!endprocedure

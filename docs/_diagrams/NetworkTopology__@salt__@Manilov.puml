@@ -1,0 +1,73 @@
+' ============================================================================
+' NetworkTopology__@salt__@Manilov.puml
+'
+' Purpose : Conceptual topology of the Wi-Fi proxyARP approach used on @salt:
+'           the Wi-Fi uplink, the tap, the proxy ARP + forwarding path, the
+'           libvirt attachment, the @Manilov virtio NIC, and the
+'           @NikolaiGogol container boundary (network_mode: host).
+' Scope   : Conceptual, 2026-11-02. Variables only — no concrete IPs.
+'           The @salt connection details are not verified from this repo;
+'           the real values are decided during deployment.
+'           Companion diagram: NetworkTopology__@terra__@Manilov.puml.
+' Invariants:
+'   * No Linux bridge. A Wi-Fi station interface cannot be a bridge port.
+'   * The LAN sees the host MAC, not the VM MAC.
+'   * Multicast/mDNS/SSDP are not transparent across proxyARP.
+'
+' Render: plantuml -tpng -tsvg docs/_diagrams/NetworkTopology__@salt__@Manilov.puml
+' ============================================================================
+
+@startuml
+!include _shared/DeployCommon.puml
+
+title @salt / @Manilov network topology\n(Wi-Fi proxyARP; conceptual, variables only)
+
+skinparam componentStyle rectangle
+
+cloud "Wi-Fi AP / LAN\n${SALT_LAN_PREFIX}" as LAN
+node "L3 gateway / DHCP\n${SALT_GW}\nDNS ${SALT_DNS}" as GW
+
+node "@salt — host\nWi-Fi station uplink" as SALT {
+  interface "${SALT_WLAN_IF}\n${SALT_WLAN_MAC}\n${SALT_WLAN_IP}\nproxy_arp=1" as W
+  interface "${SALT_TAP_NAME}\n${SALT_TAP_ADDRESS}/${SALT_TAP_PREFIX}\nproxy_arp=1" as T
+
+  package "@NikolaiGogol container\nnetwork_mode: host" as NG {
+    node "libvirt\n(in container)\n${LIBVIRT_URI}" as LIB
+  }
+}
+
+node "@Manilov VM\nHAOS\n${MANILOV_VM_NAME}" as MAN {
+  interface "virtio NIC\n${MANILOV_MAC}\n${MANILOV_IP}" as VNIC
+}
+
+GW <--> LAN
+LAN <--> W : "802.11 association\n(no bridge)"
+W <--> T : "ip_forward=1\nFORWARD ${SALT_TAP_NAME} ↔ ${SALT_WLAN_IF}"
+T <--> VNIC : "libvirt type='ethernet'\ntarget dev=${SALT_TAP_NAME} managed='no'"
+
+note right of W
+  Host answers ARP for ${MANILOV_IP}
+  on ${SALT_WLAN_IF} (proxyARP).
+  The LAN sees ${SALT_WLAN_MAC},
+  not ${MANILOV_MAC}.
+end note
+
+note bottom of SALT
+  No Linux bridge. Wi-Fi station mode
+  cannot be a bridge port.
+end note
+
+note bottom of MAN
+  Broadcast and multicast are not
+  transparent: mDNS/SSDP discovery
+  usually fails. Use unicast or a reflector.
+end note
+
+legend right
+  Variables only — no concrete addresses.
+  Conceptual diagram: the @salt values are
+  decided during deployment, not asserted here.
+  Use this approach when the only uplink is Wi-Fi.
+end legend
+
+@enduml

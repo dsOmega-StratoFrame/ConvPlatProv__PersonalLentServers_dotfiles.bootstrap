@@ -1,0 +1,56 @@
+' ============================================================================
+' Deploy_nikolaigogol__AddDependencyHomeManager.puml
+'
+' Purpose : Add a runtime dependency to the ds13 home-manager profile inside
+'           the @NikolaiGogol NixOS container, without touching the system.
+' Scope   : Unix_dotfiles flake -> deploy-rs -> home-manager profile on
+'           ds13@NikolaiGogol (direct SSH override, port 2223).
+' Date    : 2026-11-01
+'
+' Invariants:
+'   * The container must already be running and reachable; the container
+'     image is NOT rebuilt and the NixOS system closure is NOT switched.
+'   * Only the user profile changes: user packages and dotfiles from the
+'     home-manager module. System services belong to the system scope.
+'   * deploy-rs still copies the closure, runs a dry pass, then activates;
+'     activation switches the home-manager generation only.
+'   * @NikolaiGogol is NixOS, so home-manager packages may rely on the
+'     system layer; @terra (TOS 6) has no such layer (see the terra diagram).
+'   * DEPLOY_HOST is not used here: the target is the direct SSH host
+'     ds13@NikolaiGogol. hosts.ini is still authoritative for that entry.
+'
+' Render: plantuml -tpng -tsvg docs/_diagrams/Deploy_nikolaigogol__AddDependencyHomeManager.puml
+' ============================================================================
+
+@startuml
+!include _shared/DeployCommon.puml
+autonumber
+title Add a dependency to the @NikolaiGogol home-manager profile
+
+actor Operator
+participant "Terra (TOS 6)\nDocker host" as Terra
+participant "NikolaiGogol\nNixOS container\nsshd :2223" as NG
+participant "Unix_dotfiles\nflake + deploy-rs" as Dotfiles
+participant "Control node\nnix / deploy-rs" as Control
+participant "HM profile\nds13" as HM
+
+$ContainerReachable(Operator, Terra, NG, "ssh -p 2223 ds13@terra-local true\n(or docker exec HomeServer__HomeAssistant.NikolaiGogol true)")
+
+$DeclareDependency(Operator, Dotfiles, "the ds13 home-manager module for NikolaiGogol")
+
+$DeployRs(Operator, Dotfiles, Control, NG, HM, "home-manager generation switch\n(system profile untouched)", "home-manager profile", "deploy .#homeConfigurations.ds13@NikolaiGogol\n--target-host ds13@NikolaiGogol")
+note over Dotfiles, HM
+  What changes: user packages + dotfiles in the ds13
+  home-manager generation.
+  What does not: the NixOS system closure, running
+  systemd services, and the container image/rootfs.
+end note
+
+$Verify(Operator, NG, "command -v [package]; [package] --version", "readlink -f &#126;/.local/state/nix/profiles/home-manager")
+note right of NG
+  The home-manager profile points at the new
+  generation; system generations are unchanged.
+end note
+
+$FailureRollback(Control, NG, "activation fails", "Roll back to the previous home-manager generation (home-manager rollback / activate the prior generation). Do not recreate the container to fix a user-profile failure.")
+@enduml
