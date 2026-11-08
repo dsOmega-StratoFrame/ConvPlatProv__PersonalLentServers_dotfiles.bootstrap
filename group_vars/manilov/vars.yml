@@ -10,3 +10,23 @@
 manilov_vm_name: "hass_qemu16"
 manilov_data_dir: "{{ zterra_root }}/shared-/@Manilov/var-/HomeAssistant__"
 manilov_home_assistant_image: "{{ zterra_root }}/shared-/@Manilov/dotfiles-/_configs/HomeAssistant__/haos_ova.qcow2"
+
+# --- Host-owned network surfaces ---------------------------------------------
+# The @Manilov datapath is owned by the `manilov-network` image applier (ADR 0006,
+# ADR 0007). The bootstrap repo owns only these host paths: the pinned marker the
+# applier reads, the applier's durable state directory, and the rescue address.
+#
+# The marker is host-provisioned, bind-mounted read-only into the image, and its
+# selector digest is pinned in the image; it is the only network-mode selector.
+manilov_network_marker: "/etc/manilov/marker.json"
+manilov_network_state_dir: "/var/lib/manilov-network"
+
+# Rescue path (ADR 0006 D5): a timer re-asserts this static address on the
+# unconnected second NIC, so an operator keeps a foothold when the image, the
+# container or the bridge is broken. It must be an address that is unassigned on
+# the management segment and is NEVER applied to the management uplink.
+# Leave empty to require `--address` on scripts/manilov/host-rescue.sh; no
+# address is hardcoded here on purpose.
+manilov_host_rescue_address: ""
+manilov_host_rescue_interface: "eth0"
+

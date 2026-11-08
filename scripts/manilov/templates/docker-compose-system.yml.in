@@ -1,0 +1,17 @@
+services:
+  @@SERVICE@@:
+    image: ${IMAGE_NAME}
+    pull_policy: ${PULL_POLICY:-never}
+    container_name: ${CONTAINER_NAME}
+    privileged: true
+    cgroup_parent: @@CGROUP_PARENT@@
+    cgroup: host
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    security_opt:
+      - seccomp=unconfined
+    stop_signal: SIGRTMIN+3
+    volumes:
+@@VOLUMES@@
+    command: /init

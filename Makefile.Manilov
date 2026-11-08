@@ -1,0 +1,76 @@
+# Manual testing for the bootstrap-owned @Manilov network/lifecycle surfaces.
+#
+# Ownership boundary (ADR 0006, ADR 0007): the image applier `manilov-network`
+# owns br0, the uplink enslavement, the L3 move, the MAC pin, tap0/proxyARP, IPv4
+# forwarding, the VM-path nftables rules, the tap attachment and the dead-man.
+# This makefile only drives the host-side surfaces the bootstrap owns:
+# preflight, the image/bind checks, the one-time networkd relinquish and the eth0
+# rescue. Nothing here creates a bridge, moves L3, pins a MAC or writes an nft
+# rule, and nothing here kills SSH -- except `host-relinquish --apply`, which is
+# the deliberate hand-off.
+#
+# Every mutating target defaults to dry-run and needs ARGS='--apply'.
+# `host-relinquish` additionally prompts unless ARGS also contains --yes.
+#
+#   make -f Makefile.Manilov help
+#   make -f Makefile.Manilov preflight
+#   make -f Makefile.Manilov image-check
+#   make -f Makefile.Manilov stage-virt-scripts SOURCE=/path/to/Virt_scripts_bootstrap ARGS=--apply
+#   make -f Makefile.Manilov container ARGS=--apply
+#   make -f Makefile.Manilov libvirt-check
+#   make -f Makefile.Manilov verify
+#   make -f Makefile.Manilov host-relinquish ARGS='--apply --yes'
+#   make -f Makefile.Manilov host-rescue ARGS=--apply
+#
+# MANILOV_HOST is the hosts.ini name (terra-local by default, `terra` in
+# production). Use MANILOV_HOST=local for a control-node-only check. No sudo is
+# used anywhere: on @terra the SSH user is already uid 0.
+
+MANILOV_HOST ?= terra-local
+MANILOV_SCRIPTS ?= $(CURDIR)/scripts/manilov
+ARGS ?=
+SOURCE ?=
+
+include Makefile.Log
+
+.PHONY: help preflight image-check stage-virt-scripts container libvirt-check verify host-relinquish host-rescue
+
+help:
+	@echo "Manilov — bootstrap-owned network/lifecycle surfaces (host: $(MANILOV_HOST))"
+	@echo "  preflight           (read-only)  repo/vars/tools + host prerequisites"
+	@echo "  image-check         (read-only)  content-addressed tag + bind sources"
+	@echo "  stage-virt-scripts  (mutating)   rsync into the Virt_scripts_bootstrap bind"
+	@echo "  container           (mutating)   render/validate the compose definition"
+	@echo "  libvirt-check       (read-only)  libvirt/KVM inside the image"
+	@echo "  verify              (read-only)  end-to-end aggregation"
+	@echo "  host-relinquish     (mutating)   Unmanaged=yes drop-in on the management uplink"
+	@echo "  host-rescue         (mutating)   timer + static address on the unconnected NIC"
+	@echo ""
+	@echo "  Mutating targets default to dry-run. Add ARGS=--apply to execute;"
+	@echo "  host-relinquish also needs ARGS='--apply --yes' (or an interactive y)."
+	@echo "  stage-virt-scripts needs SOURCE=/path/to/Virt_scripts_bootstrap."
+	@echo "  Override the target with MANILOV_HOST=terra|terra-local|local."
+
+preflight:
+	$(RUN_LOG) manilov-preflight bash $(MANILOV_SCRIPTS)/preflight.sh --host $(MANILOV_HOST) $(ARGS)
+
+image-check:
+	$(RUN_LOG) manilov-image-check bash $(MANILOV_SCRIPTS)/image-check.sh --host $(MANILOV_HOST) $(ARGS)
+
+stage-virt-scripts:
+	$(RUN_LOG) manilov-stage-virt-scripts bash $(MANILOV_SCRIPTS)/stage-virt-scripts.sh --host $(MANILOV_HOST) $(if $(strip $(SOURCE)),--source $(SOURCE),) $(ARGS)
+
+container:
+	$(RUN_LOG) manilov-container bash $(MANILOV_SCRIPTS)/container.sh --host $(MANILOV_HOST) $(ARGS)
+
+libvirt-check:
+	$(RUN_LOG) manilov-libvirt-check bash $(MANILOV_SCRIPTS)/libvirt-check.sh --host $(MANILOV_HOST) $(ARGS)
+
+verify:
+	$(RUN_LOG) manilov-verify bash $(MANILOV_SCRIPTS)/verify.sh --host $(MANILOV_HOST) $(ARGS)
+
+host-relinquish:
+	$(RUN_LOG) manilov-host-relinquish bash $(MANILOV_SCRIPTS)/host-relinquish.sh --host $(MANILOV_HOST) $(ARGS)
+
+host-rescue:
+	$(RUN_LOG) manilov-host-rescue bash $(MANILOV_SCRIPTS)/host-rescue.sh --host $(MANILOV_HOST) $(ARGS)
