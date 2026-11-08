@@ -165,6 +165,18 @@ zterra_binds_mounts:
 # run (the role removes units it no longer configures).
 zterra_binds_retired_units:
   - "var-log.mount"
+# D-LOG: TOS declares the temp-layer skeleton in tmpfiles.d/tmp.conf (including
+# /tmp/log/postgresql 1777 postgres postgres). systemd-tmpfiles-setup runs
+# against the vendor tmpfs at boot; the /tmp bind hides it, so the skeleton must
+# be seeded on the persistent subvolume and re-seeded after every bind start.
+# PostgreSQL 13 refuses to start without /var/log/postgresql (a symlink into
+# /tmp/log), which is what broke TOS web login on 2026-11-08.
+zterra_binds_tmp_skeleton_enabled: true
+zterra_binds_tmp_skeleton_tmpfiles_conf: "/usr/lib/tmpfiles.d/tmp.conf"
+zterra_binds_tmp_skeleton_before: "postgresql.service postgresql@13-main.service"
+zterra_binds_tmp_skeleton_required_paths:
+  - "/tmp/log"
+  - "/tmp/log/postgresql"
 
 # zterra_docker_data — D-ROOT: Docker is apt-installed by Layer-0, not App
 # Center-managed, so set data-root in daemon.json and restart the daemon.

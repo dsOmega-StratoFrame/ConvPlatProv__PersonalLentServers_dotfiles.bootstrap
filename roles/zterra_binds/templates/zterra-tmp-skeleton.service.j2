@@ -1,0 +1,20 @@
+[Unit]
+Description=Seed the TOS temp skeleton (tmpfiles.d/tmp.conf) inside the zterra /tmp bind
+# Run only once the /tmp bind is live: systemd-tmpfiles-setup.service seeds the
+# tmpfs that this bind replaces, so its directories never reach the subvolume.
+RequiresMountsFor=/tmp
+After=tmp.mount
+# Re-seed when the bind is swapped/replaced at runtime, not just at boot.
+PartOf=tmp.mount
+{% if zterra_binds_tmp_skeleton_before %}
+Before={{ zterra_binds_tmp_skeleton_before }}
+{% endif %}
+ConditionPathExists={{ zterra_binds_tmp_skeleton_tmpfiles_conf }}
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/systemd-tmpfiles --create {{ zterra_binds_tmp_skeleton_tmpfiles_conf }}
+
+[Install]
+WantedBy=multi-user.target

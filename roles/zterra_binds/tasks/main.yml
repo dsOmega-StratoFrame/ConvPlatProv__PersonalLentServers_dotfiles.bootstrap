@@ -79,6 +79,9 @@
     label: "{{ item.target }}"
   changed_when: false
   failed_when: false
+  # Read-only probe whose rc gates the next task; a skipped command reports
+  # rc=0 under --check, which would silently pass the shadow guard.
+  check_mode: false
 
 - name: Fail-closed when a bind would shadow a non-empty target
   ansible.builtin.assert:
@@ -102,6 +105,10 @@
   loop_control:
     label: "{{ item.target }}"
   changed_when: false
+  # Its rendered stdout is the unit filename; a skipped command would leave it
+  # empty and make the template dest /etc/systemd/system/ (a directory) under
+  # --check.
+  check_mode: false
 
 - name: Install the zterra bind mount units
   ansible.builtin.template:
@@ -160,6 +167,9 @@
   register: zterra_binds_bound
   changed_when: false
   failed_when: false
+  # Read-only probe whose rc gates the restart; a skipped command reports rc=0
+  # under --check, which would look like "already bound".
+  check_mode: false
   loop: "{{ zterra_binds_mounts }}"
   loop_control:
     index_var: zterra_bind_index
@@ -199,6 +209,9 @@
     label: "{{ item.target }}"
   changed_when: false
   failed_when: false
+  # Read-only probe whose rc gates the final assert; a skipped command reports
+  # rc=0 under --check, which would falsely claim the bind took effect.
+  check_mode: false
   environment:
     TMPDIR: "{{ zterra_binds_module_tmpdir }}"
 
@@ -212,6 +225,117 @@
   loop: "{{ zterra_binds_identity.results }}"
   loop_control:
     label: "{{ item.item.target }}"
+
+# TOS declares the temp-layer skeleton in its tmpfiles.d/tmp.conf (d /tmp/log/,
+# d /tmp/log/postgresql 1777 postgres postgres, ...). systemd-tmpfiles-setup
+# runs once per boot against whatever /tmp is live then; the /tmp bind replaces
+# the vendor tmpfs and may also be swapped at runtime, so the skeleton is absent
+# from the persistent subvolume. PostgreSQL 13 then fails to start because
+# `pg_ctlcluster` cannot open its log file under /var/log/postgresql (a symlink
+# into /tmp/log); the unit's `-`-prefixed chown of the same path is non-fatal —
+# the 2026-11 login outage. Seed it after the bind is proven, and keep
+# it seeded on every boot with a oneshot ordered after tmp.mount (D-TMP, D-LOG).
+- name: Stat the TOS tmpfiles configuration when temp-skeleton seeding is enabled
+  ansible.builtin.stat:
+    path: "{{ zterra_binds_tmp_skeleton_tmpfiles_conf }}"
+  register: zterra_binds_tmp_skeleton_conf
+  when: zterra_binds_tmp_skeleton_enabled | bool
+
+- name: Fail-closed when the TOS tmpfiles configuration is missing
+  ansible.builtin.assert:
+    that:
+      - zterra_binds_tmp_skeleton_conf.stat.exists
+    fail_msg: >-
+      {{ zterra_binds_tmp_skeleton_tmpfiles_conf }} does not exist; the TOS
+      temp-layer skeleton cannot be seeded.
+  when: zterra_binds_tmp_skeleton_enabled | bool
+
+# `D /tmp` deletes everything under /tmp on every create pass. TOS ships it
+# commented out; refuse to run the file if a future update activates it.
+- name: Check the TOS tmpfiles configuration does not enable D /tmp
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -Eq
+      - "^[[:space:]]*D[[:space:]]+/tmp([[:space:]]|$)"
+      - "{{ zterra_binds_tmp_skeleton_tmpfiles_conf }}"
+  register: zterra_binds_tmp_skeleton_destructive
+  changed_when: false
+  failed_when: false
+  # Read-only probe whose result gates the next task: run it under --check too.
+  # A skipped command reports rc=0, which would look like an active `D /tmp`.
+  check_mode: false
+  when: zterra_binds_tmp_skeleton_enabled | bool
+
+- name: Fail-closed when the TOS tmpfiles configuration would wipe /tmp
+  ansible.builtin.assert:
+    that:
+      - zterra_binds_tmp_skeleton_destructive.rc != 0
+    fail_msg: >-
+      {{ zterra_binds_tmp_skeleton_tmpfiles_conf }} contains an active `D /tmp`
+      line; running it would delete the contents of the bound /tmp. Remove that
+      line or set zterra_binds_tmp_skeleton_enabled: false.
+  when: zterra_binds_tmp_skeleton_enabled | bool
+
+- name: Install the TOS temp-skeleton oneshot unit
+  ansible.builtin.template:
+    src: zterra-tmp-skeleton.service.j2
+    dest: "/etc/systemd/system/{{ zterra_binds_tmp_skeleton_unit }}"
+    mode: "0644"
+  register: zterra_binds_tmp_skeleton_unit_file
+  when: zterra_binds_tmp_skeleton_enabled | bool
+
+- name: Enable the TOS temp-skeleton oneshot unit
+  ansible.builtin.systemd:
+    name: "{{ zterra_binds_tmp_skeleton_unit }}"
+    enabled: true
+    daemon_reload: true
+  when: zterra_binds_tmp_skeleton_enabled | bool
+
+# Heal the current boot/run: the oneshot may be inactive or was only just
+# installed, and the bind could have been (re)placed earlier in this same run.
+- name: Seed the TOS temp skeleton inside the bound /tmp
+  ansible.builtin.command:
+    argv:
+      - systemd-tmpfiles
+      - --create
+      - "{{ zterra_binds_tmp_skeleton_tmpfiles_conf }}"
+  changed_when: false
+  when: zterra_binds_tmp_skeleton_enabled | bool
+
+- name: Start the TOS temp-skeleton oneshot unit
+  ansible.builtin.systemd:
+    name: "{{ zterra_binds_tmp_skeleton_unit }}"
+    state: "{{ 'restarted' if zterra_binds_tmp_skeleton_unit_file.changed else 'started' }}"
+  when: zterra_binds_tmp_skeleton_enabled | bool
+
+- name: Stat the required temp-skeleton paths inside the bound /tmp
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: zterra_binds_tmp_skeleton_paths
+  loop: "{{ zterra_binds_tmp_skeleton_required_paths }}"
+  loop_control:
+    label: "{{ item }}"
+  when:
+    - zterra_binds_tmp_skeleton_enabled | bool
+    # The seed task is a command and does not run under --check, so do not
+    # assert on the result it would have produced.
+    - not ansible_check_mode
+
+- name: Fail when the TOS temp skeleton is incomplete inside the bound /tmp
+  ansible.builtin.assert:
+    that:
+      - item.stat.isdir | default(false)
+    fail_msg: >-
+      {{ item.item }} is missing or not a directory in the bound /tmp; the TOS
+      temp-layer skeleton was not seeded.
+  loop: "{{ zterra_binds_tmp_skeleton_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - zterra_binds_tmp_skeleton_enabled | bool
+    - not ansible_check_mode
+    - not (item.skipped | default(false))
 
 # A unit retired from zterra_binds_mounts (e.g. the /var/log bind, D-LOG) stays
 # enabled on the device unless it is torn down; an enabled unit that can no

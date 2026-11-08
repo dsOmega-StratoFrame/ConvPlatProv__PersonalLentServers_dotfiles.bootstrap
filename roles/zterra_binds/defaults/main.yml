@@ -19,3 +19,17 @@ zterra_binds_retired_units: []
 zterra_binds_module_tmpdir: "/var/tmp"
 zterra_binds_options: "bind,nofail"
 zterra_binds_mount_dep: "zterra.mount"
+# TOS declares its temp-layer skeleton in tmpfiles.d/tmp.conf (d /tmp/log/...,
+# including /tmp/log/postgresql owned by postgres). The vendor tmpfs receives it
+# at boot, but the /tmp bind hides that tmpfs, so the skeleton is missing on the
+# persistent subvolume (PostgreSQL cannot open its log file there). When enabled,
+# the role seeds it after the bind is proven and installs a oneshot that re-seeds
+# it on every boot, ordered after tmp.mount and before PostgreSQL. Inert by
+# default: on a non-TOS host the same path can hold a destructive `D /tmp` line.
+zterra_binds_tmp_skeleton_enabled: false
+zterra_binds_tmp_skeleton_tmpfiles_conf: "/usr/lib/tmpfiles.d/tmp.conf"
+zterra_binds_tmp_skeleton_unit: "zterra-tmp-skeleton.service"
+# Space-separated units that must start after the skeleton exists.
+zterra_binds_tmp_skeleton_before: ""
+# Paths that must be directories inside the bound /tmp after seeding.
+zterra_binds_tmp_skeleton_required_paths: []

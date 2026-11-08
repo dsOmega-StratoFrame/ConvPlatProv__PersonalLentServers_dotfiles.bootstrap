@@ -21,6 +21,7 @@ LAYOUT_TASKS = ROLES / "zterra_layout" / "tasks" / "main.yml"
 BINDS_DEFAULTS = ROLES / "zterra_binds" / "defaults" / "main.yml"
 BINDS_TASKS = ROLES / "zterra_binds" / "tasks" / "main.yml"
 BINDS_TEMPLATE = ROLES / "zterra_binds" / "templates" / "zterra-bind.mount.j2"
+BINDS_SKELETON_UNIT = ROLES / "zterra_binds" / "templates" / "zterra-tmp-skeleton.service.j2"
 DOCKER_DEFAULTS = ROLES / "zterra_docker_data" / "defaults" / "main.yml"
 DOCKER_TASKS = ROLES / "zterra_docker_data" / "tasks" / "main.yml"
 DOCKER_TEMPLATES = ROLES / "zterra_docker_data" / "templates"
@@ -249,6 +250,14 @@ def test_binds_restart_only_changed_non_replace_units():
     assert "replace" in str(start["when"])
 
 
+def test_binds_unit_name_derivation_runs_in_check_mode():
+    """Under --check a skipped systemd-escape leaves stdout empty, so the unit
+    template would be written to /etc/systemd/system/ (a directory)."""
+    derive = _find_task(load(BINDS_TASKS), "Derive each bind unit name")
+    assert derive["check_mode"] is False
+    assert "systemd-escape" in derive["ansible.builtin.command"]
+
+
 def test_binds_template_orders_after_the_zterra_mount():
     text = BINDS_TEMPLATE.read_text()
     assert "After={{ zterra_bind.after | default(zterra_binds_mount_dep) }}" in text
@@ -283,6 +292,8 @@ def test_binds_replace_detects_an_already_bound_target():
     tasks = load(BINDS_TASKS)
     check = _find_task(tasks, "already bound to its source")
     assert "stat -c %d:%i" in str(check["ansible.builtin.command"])
+    # A skipped command reports rc=0 under --check, which would look "bound".
+    assert check["check_mode"] is False
     restart = _find_task(tasks, "Replace a stale mount")
     assert restart["ansible.builtin.systemd"]["state"] == "restarted"
     assert "item.rc" in str(restart["when"])
@@ -313,6 +324,7 @@ def test_binds_refuse_to_shadow_a_non_empty_target():
     check = _find_task(tasks, "would shadow existing content")
     assert "stat -c %d:%i" in str(check["ansible.builtin.command"])
     assert "ls -A" in str(check["ansible.builtin.command"])
+    assert check["check_mode"] is False
     guard = _find_task(tasks, "Fail-closed when a bind would shadow a non-empty target")
     conditions = " ".join(guard["ansible.builtin.assert"]["that"])
     assert "item.rc == 0" in conditions
@@ -329,6 +341,7 @@ def test_binds_verify_the_mount_actually_took_effect():
     tasks = load(BINDS_TASKS)
     verify = _find_task(tasks, "Verify each bind target resolves to its source")
     assert "stat -c %d:%i" in str(verify["ansible.builtin.command"])
+    assert verify["check_mode"] is False
     assert verify["environment"]["TMPDIR"] == "{{ zterra_binds_module_tmpdir }}"
     assert _task_index(tasks, "Replace a stale mount") < _task_index(
         tasks, "Verify each bind target resolves to its source"
@@ -341,6 +354,85 @@ def test_binds_retire_stale_units():
     assert _find_task(tasks, "Stop and disable the retired bind units")
     assert _find_task(tasks, "Remove the retired bind unit files")
     assert load(BINDS_DEFAULTS)["zterra_binds_retired_units"] == []
+
+
+# --- zterra_binds: TOS temp skeleton (D-LOG) ---------------------------------
+
+def test_binds_tmp_skeleton_is_inert_by_default():
+    """On a non-TOS host tmpfiles.d/tmp.conf can contain a destructive D /tmp."""
+    assert load(BINDS_DEFAULTS)["zterra_binds_tmp_skeleton_enabled"] is False
+
+
+def test_terra_seeds_the_tos_temp_skeleton_after_the_tmp_bind():
+    """TOS declares /tmp/log/postgresql in tmpfiles.d/tmp.conf, but tmpfiles
+    runs against the tmpfs the /tmp bind replaces; the persistent subvolume
+    never receives it (the 2026-11 PostgreSQL/login outage)."""
+    data = load(TERRA_VARS)
+    assert data["zterra_binds_tmp_skeleton_enabled"] is True
+    assert data["zterra_binds_tmp_skeleton_tmpfiles_conf"] == "/usr/lib/tmpfiles.d/tmp.conf"
+    assert "/tmp/log/postgresql" in data["zterra_binds_tmp_skeleton_required_paths"]
+    assert "postgresql.service" in data["zterra_binds_tmp_skeleton_before"]
+    tasks = load(BINDS_TASKS)
+    seed = _find_task(tasks, "Seed the TOS temp skeleton inside the bound /tmp")
+    assert seed["ansible.builtin.command"]["argv"] == [
+        "systemd-tmpfiles",
+        "--create",
+        "{{ zterra_binds_tmp_skeleton_tmpfiles_conf }}",
+    ]
+    # The source must be proven to be the bind before seeding into it.
+    assert _task_index(tasks, "Verify each bind target resolves to its source") < _task_index(
+        tasks, "Seed the TOS temp skeleton inside the bound /tmp"
+    )
+
+
+def test_binds_tmp_skeleton_does_not_precreate_the_tmp_subvolume_parent():
+    """local-/var-/tmp/log must NOT be a zterra_layout_directory: that task runs
+    before subvolume creation and would leave local-/var-/tmp a plain directory,
+    making `btrfs subvolume create` skip it (the same var-/lib/docker pitfall)."""
+    dirs = [d["path"] for d in load(TERRA_VARS)["zterra_layout_directories"]]
+    assert not any("/local-/var-/tmp" in p for p in dirs)
+
+
+def test_binds_tmp_skeleton_guards_against_a_destructive_d_tmp():
+    """`D /tmp` would delete the bound /tmp contents on every boot."""
+    tasks = load(BINDS_TASKS)
+    check = _find_task(tasks, "does not enable D /tmp")
+    argv = check["ansible.builtin.command"]["argv"]
+    assert any("^[[:space:]]*D[[:space:]]+/tmp" in arg for arg in argv)
+    # A command task skipped under --check reports rc=0, which would look like a
+    # match; this read-only probe must execute in check mode.
+    assert check["check_mode"] is False
+    guard = _find_task(tasks, "would wipe /tmp")
+    assert "rc != 0" in str(guard["ansible.builtin.assert"]["that"])
+
+
+def test_binds_tmp_skeleton_verification_is_skipped_in_check_mode():
+    """--check does not run the seed command, so it must not assert on the
+    directories that command would have created."""
+    tasks = load(BINDS_TASKS)
+    stat = _find_task(tasks, "Stat the required temp-skeleton paths")
+    verify = _find_task(tasks, "Fail when the TOS temp skeleton is incomplete")
+    assert "not ansible_check_mode" in stat["when"]
+    assert "not ansible_check_mode" in verify["when"]
+
+
+def test_binds_tmp_skeleton_unit_runs_after_tmp_and_before_postgresql():
+    text = BINDS_SKELETON_UNIT.read_text()
+    assert "RequiresMountsFor=/tmp" in text
+    assert "After=tmp.mount" in text
+    assert "PartOf=tmp.mount" in text
+    assert "Before={{ zterra_binds_tmp_skeleton_before }}" in text
+    assert "ExecStart=/usr/bin/systemd-tmpfiles --create {{ zterra_binds_tmp_skeleton_tmpfiles_conf }}" in text
+    assert "Type=oneshot" in text
+    assert "RemainAfterExit=yes" in text
+    assert "WantedBy=multi-user.target" in text
+
+
+def test_binds_tmp_skeleton_verifies_the_required_paths():
+    tasks = load(BINDS_TASKS)
+    stat = _find_task(tasks, "Stat the required temp-skeleton paths")
+    assert stat["loop"] == "{{ zterra_binds_tmp_skeleton_required_paths }}"
+    assert _find_task(tasks, "Fail when the TOS temp skeleton is incomplete")
 
 
 # --- zterra_docker_data -------------------------------------------------------
