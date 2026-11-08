@@ -28,6 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 ROLE = REPO / "roles" / "bootstrap_nix"
 TASKS_PATH = ROLE / "tasks" / "main.yml"
 DEFAULTS_PATH = ROLE / "defaults" / "main.yml"
+VERIFY_TERRA = REPO / "verify-terra.yml"
 
 # Variables the wrapper only passes on when the operator configures them.
 OPTIONAL_FACTS = ("nix_version", "installer_checksum", "config")
@@ -503,3 +504,52 @@ def test_post_install_asserts_the_expected_mount_device_when_configured():
     assert "bootstrap_nix_root_device.stdout" in conditions
     assert "bootstrap_nix_expected_mount_device.stdout" in conditions
     assert check["when"] == "bootstrap_nix_expected_mount_source | length > 0"
+
+
+def test_creates_the_per_user_nix_profile_parent():
+    task = _find_task(
+        _tasks(), "Ensure the per-user Nix profile parent directory exists"
+    )
+    file_args = task["ansible.builtin.file"]
+    assert file_args["path"] == "{{ bootstrap_nix_user_profiles_dir }}"
+    assert file_args["state"] == "directory"
+    assert file_args["mode"] == "0755"
+    for forbidden in ("become", "become_user"):
+        assert forbidden not in task
+
+
+def test_user_profiles_dir_default_is_xdg_aware():
+    expression = _defaults()["bootstrap_nix_user_profiles_dir"]
+    assert "XDG_STATE_HOME" in expression
+    assert ".local/state/nix/profiles" in expression
+    assert "/home/" not in expression
+
+
+def test_profile_bin_uses_the_nix_profiles_state_layout():
+    dirs = _defaults()["bootstrap_nix_profile_bin_dirs"]
+    assert any(
+        entry.endswith("/.local/state/nix/profiles/profile/bin")
+        for entry in dirs
+    )
+    assert not any(
+        entry.endswith("/.local/state/nix/profile/bin") for entry in dirs
+    )
+
+
+def test_verify_play_checks_the_per_user_nix_profile_parent():
+    play = yaml.safe_load(VERIFY_TERRA.read_text())[0]
+    assert (
+        play["vars"]["verify_nix_user_profiles"]
+        == "/home/terra/.local/state/nix/profiles"
+    )
+
+    stat = _find_task(play["tasks"], "Check the per-user Nix profile parent")
+    assert stat["ansible.builtin.stat"]["path"] == "{{ verify_nix_user_profiles }}"
+    assert stat["register"] == "verify_nix_user_profiles_stat"
+
+    guard = _find_task(
+        play["tasks"], "Fail when the per-user Nix profile parent is missing"
+    )
+    assert "verify_nix_user_profiles_stat.stat.isdir" in (
+        guard["ansible.builtin.assert"]["that"]
+    )
