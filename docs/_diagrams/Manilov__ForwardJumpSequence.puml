@@ -1,0 +1,173 @@
+' ============================================================================
+' Manilov__ForwardJumpSequence.puml
+'
+' Purpose : The sequence of nftables table/chain jumps on the @Manilov VM path
+'           (@terra, bridge profile): where the image's drop-only tables sit
+'           relative to the host's scoped forward permit, and why the
+'           MANILOV_FORWARD jump must precede the first Docker jump.
+' Source  : docs/adr/0006-ManilovNetworkOwnership.md — D4 (firewall split),
+'           D4a (host permit MANILOV_FORWARD), §6b OQ5; ADR 0007 D1/D3.
+' Scope   : structure and ordering only. No concrete interface names, no
+'           addresses, no live rule handles. The live Docker jump order is
+'           deliberately NOT drawn: it is read from
+'             nft -a list chain inet filter FORWARD
+'           and it is the rule-handle order, not anything in this file.
+' Invariants:
+'   * Two independent traversals. (1) BASE-CHAIN walk at a hook: every base
+'     chain registered on that hook is traversed in priority order. (2) RULE
+'     walk inside one base chain: an ordered list, evaluated by handle.
+'   * At one hook an `accept` is not final; a `drop` is final; a jump cannot
+'     cross tables — so the permit cannot be jumped from the image table.
+'   * br_netfilter (bridge-nf-call-*) makes a bridged frame traverse the IP
+'     forward hook too. br_netfilter's IP-forward shim is registered at
+'     NF_BR_FORWARD with priority NF_BR_PRI_FIRST (INT_MIN), which is ahead of
+'     every configurable bridge-family priority — including the image table's
+'     -10. Hence the IP forward hook runs BEFORE the bridge-family forward
+'     chains. Within one hook, priority order decides (image -10 before host 0).
+'   * At the IP forward hook a bridged frame's iif/oif are the bridge PORTS,
+'     not `br0`. Port placeholders are used here on purpose.
+'
+' Render  : plantuml -tpng -tsvg docs/_diagrams/Manilov__ForwardJumpSequence.puml
+' ============================================================================
+
+@startuml
+!include _shared/DeployCommon.puml
+
+title @Manilov VM path — nftables table/chain jump sequence\n(host permit vs image drops; live Docker order = OQ5, unknown)
+
+skinparam noteBackgroundColor #FFFDF0
+skinparam noteBorderColor #888888
+skinparam wrapWidth 640
+skinparam maxMessageSize 420
+skinparam noteTextAlignment left
+
+participant "packet\n(one frame)" as PKT
+participant "hook: bridge/\nforward\n(base chains,\nby priority)" as BRF
+participant "hook: inet/\nforward\n(base chains,\nby priority)" as IPF
+participant "inet filter FORWARD\none base chain\n(rules, by handle)" as FWD
+participant "regular chains\nMANILOV_FORWARD\nDOCKER-*" as REG
+participant "egress\nport" as OUT
+
+== S0 — Legend: what a verdict means ==
+note over PKT, OUT
+  TRAVERSAL 1 — base chains at a hook, ordered by PRIORITY (every base chain on the hook is traversed).
+  TRAVERSAL 2 — rules inside ONE base chain, ordered by HANDLE.
+  `accept` in a base chain is NOT final (the next base chain still runs); a `drop` is final; a base-chain policy
+  applies only when its own rule list ends with no verdict; a jump cannot cross tables.
+end note
+
+== S1 — VM -> LAN: traversal 1, base chains at each hook ==
+PKT -> BRF : S1 frame in on the tap PORT of br0
+note over PKT, OUT
+  S0.5 (nothing decided here): bridge/PREROUTING -> br_nf_pre_routing (INT_MIN)
+  -> IP prerouting, which is conntrack only.
+  br_nf_forward_ip sits at NF_BR_FORWARD with priority NF_BR_PRI_FIRST (INT_MIN), so the IP forward hook (S2/S3)
+  runs BEFORE the bridge-family FORWARD chains — the image one is at -10.
+end note
+
+BRF -> IPF : S2 br_netfilter (br_nf_forward_ip at NF_BR_PRI_FIRST)\ncalls the IP forward hook from inside the bridge forward path
+note over PKT, OUT
+  S3 base chains at inet/forward, in PRIORITY order:
+     prio -10  table inet manilov_vm      (image: DROPS ONLY, policy accept) -> no drop matches -> accept (NOT final)
+     prio   0  table inet filter FORWARD  (host) -> S4, traversal 2
+  Base chains of other families at this hook (e.g. an `ip`-family Docker FORWARD) are ordered by priority, then by
+  registration order: read them live. A `drop` anywhere here kills the frame immediately.
+end note
+
+IPF -> FWD : S4 enter the host FORWARD rule list
+
+== S2 — VM -> LAN: traversal 2, rules inside inet filter FORWARD ==
+note over PKT, OUT
+  S4 rules are evaluated in HANDLE order; contract-relevant shape only:
+     #1  jump MANILOV_FORWARD          <- must precede the first Docker jump
+     #2  jump DOCKER-USER              <- actual identity/handle: OQ5, see S6
+     #3  jump DOCKER-FORWARD
+     #4  jump DOCKER-ISOLATION-STAGE-1
+         (end of rule list -> policy drop)
+  A `jump` to a regular chain RETURNS on completion, but a `drop` or an `accept` reached inside FORWARD itself
+  TERMINATES this rule list. A `goto` (not drawn) never returns at all.
+end note
+
+FWD -> REG : S5 jump MANILOV_FORWARD (position #1)
+note over PKT, OUT
+  S5 MANILOV_FORWARD is a REGULAR chain in table inet filter, scoped to the declared pair only:
+     iifname "<tap-port>"    oifname "<uplink-port>"  accept
+     iifname "<uplink-port>" oifname "<tap-port>"     accept
+  The placeholders are bridge PORTS: at this hook a bridged frame is not seen with `br0` as iif/oif.
+  VERIFY ON THE LIVE HOST before trusting the pair: `nft -a list chain inet filter FORWARD` plus
+  `bridge link` / `ip -d link show <tap>`. Recorded as OQ5b in ADR 0006 §6b; the contract is unchanged.
+end note
+
+REG --> FWD : S6 accept returned to FORWARD; FORWARD ends here,\nso its policy drop is never reached for this packet
+IPF -> BRF : S7 back to bridge/forward: bridge-family base chains, by priority
+note over PKT, OUT
+  S7 prio -10 table bridge manilov_vm (image: DROPS ONLY, policy accept) -> no drop matches -> accept.
+  A `drop` HERE is final even though the IP hook already accepted, so the image's anti-spoof/isolation drops still
+  apply after the host permit. The reverse is impossible: this table can never permit anything.
+end note
+
+BRF -> OUT : S8 bridge/POSTROUTING -> IP postrouting -> frame out on the uplink PORT
+
+== S3 — LAN -> VM: mirror walk, same two traversals ==
+PKT -> BRF : S1' frame in on the uplink PORT of br0
+BRF -> IPF : S2' br_netfilter -> IP forward hook
+note over PKT, OUT
+  S3' prio -10 table inet manilov_vm (image drops) -> no match -> accept;
+      prio   0 table inet filter FORWARD -> jump MANILOV_FORWARD (#1) -> accept (iif uplink, oif tap)
+               -> FORWARD ends; the Docker jumps are never evaluated.
+  S7' bridge/forward: table bridge manilov_vm (prio -10), drops only -> S8' out on the tap PORT -> @Manilov virtio.
+end note
+
+== S4 — FAILURE: permit jump placed after a Docker jump ==
+PKT -> FWD : S4 frame enters FORWARD; rules evaluated in handle order
+FWD -> REG : jump DOCKER-USER (#1) ...\njump DOCKER-FORWARD (#2) ...\njump MANILOV_FORWARD (#3) <- never reached
+alt a Docker chain returns drop
+  note over PKT, OUT
+    DROP is final: the frame dies inside the IP hook. The bridge-family image drops never even run. VM unreachable.
+  end note
+else no rule matches; the rule list ends
+  note over PKT, OUT
+    Base-chain policy drop -> final -> the frame dies inside br_nf_forward_ip; the bridge hook is never reached.
+    VM unreachable, with no diagnostic beyond the counter on the policy.
+  end note
+else a Docker rule happens to accept
+  note over PKT, OUT
+    ACCEPT, but the permit was never evaluated: connectivity works by accident and the permit's interface-pair
+    scoping is not applied. Docker's rule set, not the marker, decides.
+  end note
+end
+
+== S5 — Who sits where: neither side can substitute for the other ==
+note over PKT, OUT
+  IMAGE (@NikolaiGogol applier): table bridge manilov_vm + table inet manilov_vm, hook forward,
+    prio -10, policy accept, DROPS ONLY. Can kill a packet at any point; can never let one through;
+    never reasserted by the host.
+  HOST (bootstrap / host provisioning): regular chain MANILOV_FORWARD jumped from FORWARD before the
+    first Docker jump, ACCEPT ONLY. The only object that carries the packet past the host `drop` policy,
+    and the only one the host reasserts after reboot or a host-manager reassertion.
+  Remove the permit -> VM unreachable (policy drop wins; the image drops are irrelevant).
+  Remove the image drops -> forwarding works, anti-spoof/isolation is lost. Complementary, never alternatives.
+end note
+
+== S6 — OQ5: the one thing this diagram must NOT invent ==
+note over PKT, OUT
+  The decision fixes ONE position: our jump precedes the FIRST Docker jump.
+  It does not fix the relative order of DOCKER-USER, DOCKER-FORWARD,
+  DOCKER-ISOLATION-STAGE-1, or any TOS-managed rule. That is OQ5, and it is resolved only by reading the live chain:
+         nft -a list chain inet filter FORWARD
+  Both shapes below are contract-conforming, and both are UNKNOWN until read:
+     variant A: ours, DOCKER-USER, DOCKER-FORWARD, DOCKER-ISOLATION-STAGE-1
+     variant B: TOS-rule, ours, DOCKER-FORWARD, DOCKER-USER, ...
+  The invariant is only `ours` before the first `jump|goto DOCKER-*` handle.
+end note
+
+legend right
+  Two traversals, never conflated:
+    1. base chains at a hook -> by priority
+    2. rules inside a chain  -> by handle
+  accept at a hook = not final.  drop = final.
+  a jump cannot cross tables.
+  OQ5 = live Docker jump order, read from `nft -a list chain inet filter FORWARD`.
+end legend
+
+@enduml

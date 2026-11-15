@@ -1,0 +1,68 @@
+' ============================================================================
+' Manilov__ForwardJumpSequence__ELI5.puml
+'
+' Purpose : Plain-language companion to Manilov__ForwardJumpSequence.puml.
+'           Same two-checkpoint story, no packet-filter internals.
+' Source  : docs/adr/0006-ManilovNetworkOwnership.md - D4, D4a, section 6b (OQ5).
+' Scope   : Exactly five ideas: two checkpoints in a row; door one can only
+'           stop; desk two defaults to stop; the permit is read at desk two
+'           before any guard step that can end the queue; placed after that
+'           guard step, the permit is never read and the visitor vanishes
+'           silently.
+' Note    : Deliberately jargon-free. Do not add rule-engine terms here; put
+'           them in the technical diagram instead.
+' Render  : plantuml -tpng -tsvg docs/_diagrams/Manilov__ForwardJumpSequence__ELI5.puml
+' ============================================================================
+
+@startuml
+title Two checkpoints, two orders — plain view
+
+skinparam shadowing false
+skinparam defaultTextAlignment center
+skinparam RectangleBackgroundColor #F7FBFF
+skinparam RectangleBorderColor #4A6FA5
+skinparam packageStyle rectangle
+
+rectangle "GOOD ORDER" as GOOD #EAF7EA {
+  rectangle "Visitor arrives" as G1
+  rectangle "Inner door (check 1 of 2):\nlocks only, never opens" as G2
+  rectangle "Front desk (check 2 of 2), default no:\nread the visitor pass FIRST" as G3
+  rectangle "Waved through;\nthe 'no appointment' step never runs" as G4
+  G1 --> G2
+  G2 --> G3
+  G3 --> G4
+}
+
+rectangle "BAD ORDER" as BAD #FDECEC {
+  rectangle "Visitor arrives" as B1
+  rectangle "Inner door (check 1 of 2):\nlocks only, never opens" as B2
+  rectangle "Front desk (check 2 of 2), default no:\n'no appointment → leave' runs first" as B3
+  rectangle "Gone before the pass is read.\nSilent — no error is shown." as B4
+  B1 --> B2
+  B2 --> B3
+  B3 --> B4
+}
+
+GOOD -[hidden]right- BAD
+note bottom of G4
+Good order: the pass is read at the front desk,
+so the visitor is let through.
+end note
+
+note bottom of B4
+Bad order: the guard ends the queue before the pass is read;
+the visitor disappears and nothing reports it.
+end note
+
+legend right
+|= In the building |= On the packet path |
+| Visitor | one packet |
+| Inner door (locks only) | VM-side check: can only say "stop" |
+| Front desk (default: no visitors) | host-side check: default is "stop" |
+| Visitor pass | the "let this through" slip |
+| Guard: "no appointment → leave" | any guard step that can end the queue |
+| Waved through | packet continues |
+| Gone, no error | packet stopped silently |
+endlegend
+
+@enduml

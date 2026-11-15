@@ -62,6 +62,46 @@ The matching documents are
 and
 [`docs/NetworkTopology__@salt__@Manilov.md`](../NetworkTopology__@salt__@Manilov.md).
 
+## Firewall and forward-path sequences
+
+These diagrams show **ordering** rather than topology: which nftables chain is
+evaluated when, and which verdict is final. They exist because the same packet
+is subject to two independent traversals — base chains at a hook (ordered by
+priority) and rules inside one base chain (ordered by handle) — and conflating
+the two is the usual source of a wrong conclusion.
+
+| Path | Diagram | Basename | Pre-rendered |
+|---|---|---|---|
+| `@Manilov` VM ↔ LAN on `@terra` | Sequence of table/chain jumps: image drop-only tables vs the host `MANILOV_FORWARD` permit, the three failure outcomes, and the OQ5 Docker-order variants | [`Manilov__ForwardJumpSequence`](Manilov__ForwardJumpSequence.puml) | `Manilov__ForwardJumpSequence` | yes |
+| `@Manilov` VM ↔ LAN on `@terra` — plain language | **Plain-language companion** to the row above (not a replacement): the same two checkpoints told as two doors and a front desk, with the good and bad orders side by side | [`Manilov__ForwardJumpSequence__ELI5`](Manilov__ForwardJumpSequence__ELI5.puml) | `Manilov__ForwardJumpSequence__ELI5` | yes |
+
+The sequence diagram is the graphical form of the text walk embedded in
+[`docs/adr/0006-ManilovNetworkOwnership.md`](../adr/0006-ManilovNetworkOwnership.md)
+D4a; §6b carries the three residuals (OQ5, OQ5a, OQ5b) that the diagram
+deliberately does not decide.
+
+## Flow ownership (progressive)
+
+Three **ownership** diagrams, one per flow. They are not rule diagrams: they
+show which actor controls each surface, where ownership changes, and who may
+write, read, or grant at each checkpoint. Every diagram stacks four levels
+(L0 intent → L1 logical → L2 segments and hand-offs → L3 checkpoints) so each
+level is readable on its own, and all three share one legend — defined once in
+[`_shared/ManilovFlowOwnershipCommon.puml`](_shared/ManilovFlowOwnershipCommon.puml)
+— where colour identifies the owner.
+
+| Flow | Diagram | Basename | Pre-rendered |
+|---|---|---|---|
+| F1: `@Manilov` → house router → internet | [`Manilov__FlowOwnership__ManilovToInternet`](Manilov__FlowOwnership__ManilovToInternet.puml) | `Manilov__FlowOwnership__ManilovToInternet` | yes |
+| F2: LAN device → `@Manilov` | [`Manilov__FlowOwnership__LanToManilov`](Manilov__FlowOwnership__LanToManilov.puml) | `Manilov__FlowOwnership__LanToManilov` | yes |
+| F3: `@Manilov` → another LAN device | [`Manilov__FlowOwnership__ManilovToLan`](Manilov__FlowOwnership__ManilovToLan.puml) | `Manilov__FlowOwnership__ManilovToLan` | yes |
+
+L2 and L3 stay in the rendered diagrams; ADR 0006's
+[`Flow ownership (progressive)`](../adr/0006-ManilovNetworkOwnership.md) section
+carries the compact L0 + L1 text. The diagrams are companions to
+`Manilov__ForwardJumpSequence__ELI5`: the same two checkpoints, stated as
+ownership rather than as a packet-filter walk.
+
 ## Shared include library
 
 `_shared/DeployCommon.puml` holds the shared skinparams and the reusable
@@ -97,7 +137,8 @@ both rules — no diagram block, no rendered output.
 
 Filename rules: edge scenarios keep the `EdgeIteration_scripts__` prefix and
 the `S<id>` scenario prefix; deployment diagrams use
-`Deploy_<host>__<PascalCase>`. No spaces.
+`Deploy_<host>__<PascalCase>`; `@Manilov` datapath and firewall sequences use
+`Manilov__<PascalCase>`. No spaces.
 
 ## Related
 

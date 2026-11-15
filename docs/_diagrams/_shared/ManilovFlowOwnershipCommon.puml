@@ -1,0 +1,68 @@
+' ============================================================================
+' _shared/ManilovFlowOwnershipCommon.puml
+'
+' Purpose : Shared palette, skinparams and the single owner legend used by the
+'           three progressive "flow ownership" diagrams
+'           (Manilov__FlowOwnership__*.puml).
+' Source  : docs/adr/0006-ManilovNetworkOwnership.md — D1/D1.1 (ownership),
+'           D4/D4a (checkpoints), D4b (extensibility);
+'           docs/adr/0007-ContainerDatapathOwnership.md — D1, D3.
+' Scope   : Presentation only. NO @startuml/@enduml, so the top-level glob
+'           `docs/_diagrams/*.puml` never renders it.
+'
+' Invariants:
+'   * Six owners, six colours. Colour identifies the owner everywhere.
+'   * $OwnershipLegend() is defined once and invoked by every diagram, so the
+'     three flows share literally one legend.
+'   * The callers draw an ownership picture, never a rule list. Each caller
+'     may name the host permit once, in L3, as an object label.
+'   * Layout note: each diagram uses a white "title spine" (T0..T3, row labels)
+'     with hidden vertical links, so the four levels stack deterministically.
+'     Do not replace it with arrows that point up: that reverses a rank and
+'     scrambles the layout.
+' ============================================================================
+
+!define OWN_AM    #E8F1FB;line:2F6FBF
+!define OWN_NG    #E7F6E7;line:2E7D32
+!define OWN_TOS   #FFF3DC;line:B26A00
+!define OWN_BR    #F4E8F8;line:7B1FA2
+!define OWN_DK    #ECEFF1;line:455A64
+!define OWN_HL    #E0F7FA;line:00838F
+!define OWN_GROUP #FAFAFA;line:9E9E9E
+!define OWN_MARK  #FFF8E1;line:B26A00
+!define OWN_LABEL #FFFFFF;line:FFFFFF
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultTextAlignment left
+skinparam wrapWidth 190
+skinparam ArrowThickness 1.6
+skinparam ArrowColor #455A64
+skinparam nodesep 18
+skinparam ranksep 26
+skinparam rectangle {
+  BorderThickness 1.5
+  RoundCorner 10
+  FontSize 13
+}
+
+' Six owners, one legend, identical in all three diagrams.
+' Caller must chain the last row label into LGH:
+'     <row label> -[hidden]down-> LGH
+!procedure $OwnershipLegend()
+rectangle "**LEGEND**\ncolour = owner\n(shared by all three flows)" as LGH OWN_LABEL
+rectangle " " as LGH2 OWN_LABEL
+rectangle "@Manilov (HAOS VM)\nown addressing, own application traffic" as LG1 OWN_AM
+rectangle "NixOS in @NikolaiGogol\nbr0, tap, uplink L2/L3, MAC pin, stop tables" as LG2 OWN_NG
+rectangle "TOS on @terra (host)\nNICs, global firewall, SSH, Docker, boot" as LG3 OWN_TOS
+rectangle "Bootstrap repo\nrelinquish, forward permit and lifecycle, marker, rescue" as LG4 OWN_BR
+rectangle "Docker (other services)\nown bridges; host-managed chains it fills" as LG5 OWN_DK
+rectangle "House LAN / router\nDHCP, gateway, DNS, L2 segment" as LG6 OWN_HL
+LGH -[hidden]down-> LGH2
+LGH -[hidden]right-> LG1
+LG1 -[hidden]right-> LG2
+LG2 -[hidden]right-> LG3
+LGH2 -[hidden]right-> LG4
+LG4 -[hidden]right-> LG5
+LG5 -[hidden]right-> LG6
+!endprocedure

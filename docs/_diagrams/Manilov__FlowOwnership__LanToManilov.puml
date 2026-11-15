@@ -1,0 +1,96 @@
+' ============================================================================
+' Manilov__FlowOwnership__LanToManilov.puml
+'
+' Purpose : Flow F2 — a LAN device -> @Manilov, told as ownership, not as rules.
+'             L0 intent       one arrow, and why the host is on the path
+'             L1 logical      LAN device -> host -> container -> VM
+'             L2 segments     who controls each surface; hand-off is explicit
+'             L3 checkpoints  host side first, then VM side; who writes/reads/grants
+' Source  : docs/adr/0006-ManilovNetworkOwnership.md — D1, D1.1, D4, D4a, D4b.
+' Style   : companion to Manilov__ForwardJumpSequence__ELI5.puml. Colour = owner.
+' Render  : plantuml -tpng -tsvg docs/_diagrams/Manilov__FlowOwnership__LanToManilov.puml
+' ============================================================================
+
+@startuml
+!include _shared/ManilovFlowOwnershipCommon.puml
+
+title F2 — a LAN device -> @Manilov\nownership flow, L0 to L3 (colour = owner)
+
+rectangle "**L0**\nINTENT" as T0 OWN_LABEL
+rectangle "**L1**\nLOGICAL" as T1 OWN_LABEL
+rectangle "**L2**\nSEGMENTS\nAND HAND-OFFS" as T2 OWN_LABEL
+rectangle "**L3**\nCHECKPOINTS\nhost side, then VM" as T3 OWN_LABEL
+rectangle "CHECKPOINT 1\nhost side" as K1 OWN_LABEL
+rectangle "CHECKPOINT 2\nVM side\n«NixOS image»" as K2 OWN_LABEL
+
+' -- L0: one arrow, and why the host is involved -----------------------------
+rectangle "a LAN device\nwants @Manilov\n«house LAN»" as a0 OWN_HL
+rectangle "@Manilov\nis the destination\n«@Manilov»" as b0 OWN_AM
+
+' -- L1: the boxes the flow passes through ------------------------------------
+rectangle "a LAN device\n«house LAN»" as a1 OWN_HL
+rectangle "TOS on @terra\nhost\n«TOS on @terra»" as h1 OWN_TOS
+rectangle "NixOS in @NikolaiGogol\ncontainer, host netns\n«NixOS image»" as c1 OWN_NG
+rectangle "@Manilov VM\n«@Manilov»" as v1 OWN_AM
+
+' -- L2: the surfaces that carry the flow, each with its controller -----------
+rectangle "house L2 segment\n«house LAN»" as s1 OWN_HL
+rectangle "eth1 — NIC + driver\n«TOS on @terra»" as s2 OWN_TOS
+rectangle "HAND-OFF\nNIC hardware: TOS\nL2 + L3: image" as shr OWN_MARK
+rectangle "eth1 on this path\nL2 membership + L3\n«NixOS image»" as s3 OWN_NG
+rectangle "br0 — bridge, L3, MAC pin\n«NixOS image»" as s4 OWN_NG
+rectangle "VM tap\n«NixOS image»" as s5 OWN_NG
+rectangle "virtio NIC\n«@Manilov»" as s6 OWN_AM
+
+' -- L3: two checkpoints, owner labels only -----------------------------------
+rectangle "gate writer: TOS\ndefault answer: no" as k1a OWN_TOS
+rectangle "GRANT: MANILOV_FORWARD\n«bootstrap», lifecycle 24/7" as k1b OWN_BR
+rectangle "reader: image «NixOS»\nread-only, fails closed" as k1c OWN_NG
+rectangle "STOP: the host default\nmay stop here" as k1d OWN_TOS
+rectangle "Docker chains — live order\nmay stop its own traffic" as k1e OWN_DK
+rectangle "writer: image «NixOS»\neffect: stop only" as k2a OWN_NG
+rectangle "grant: none here\nthe image cannot permit" as k2b OWN_NG
+rectangle "STOP: anti-spoof and\nisolation may stop here" as k2c OWN_NG
+
+$OwnershipLegend()
+
+' -- the title spine: hidden vertical links fix the stacking order ------------
+T0 -[hidden]down-> T1
+T1 -[hidden]down-> T2
+T2 -[hidden]down-> T3
+T3 -[hidden]down-> K1
+K1 -[hidden]down-> K2
+K2 -[hidden]down-> LGH
+
+' -- L0 row ------------------------------------------------------------------
+T0 -[hidden]right-> a0
+a0 -right-> b0 : only door in — the host owns the uplink
+
+' -- L1 row ------------------------------------------------------------------
+T1 -[hidden]right-> a1
+a1 -right-> h1
+h1 -right-> c1
+c1 -right-> v1
+
+' -- L2 row ------------------------------------------------------------------
+T2 -[hidden]right-> s1
+s1 -right-> s2
+s2 -[#B26A00]right-> shr
+shr -[#B26A00]right-> s3
+s3 -right-> s4
+s4 -right-> s5
+s5 -right-> s6
+
+' -- L3 row 1: host-side checkpoint ------------------------------------------
+K1 -[hidden]right-> k1a
+k1a -[hidden]right-> k1b
+k1b -[hidden]right-> k1c
+k1c -[hidden]right-> k1d
+k1d -[hidden]right-> k1e
+
+' -- L3 row 2: VM-side checkpoint --------------------------------------------
+K2 -[hidden]right-> k2a
+k2a -[hidden]right-> k2b
+k2b -[hidden]right-> k2c
+
+@enduml
