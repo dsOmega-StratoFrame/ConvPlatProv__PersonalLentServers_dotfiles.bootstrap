@@ -3,9 +3,9 @@
 # bootstrap-owned @Manilov surfaces.
 #
 # It aggregates preflight, image-check and libvirt-check, then inspects the host
-# relinquish state, the rescue unit and (when the image provides it) the
-# `manilov-network` applier's read-only `check`/`status`. It never writes and
-# never runs a mutating applier verb.
+# relinquish state, the rescue unit, the marker-scoped host FORWARD permit and
+# (when the image provides it) the `manilov-network` applier's read-only
+# `check`/`status`. It never writes and never runs a mutating applier verb.
 set -euo pipefail
 
 # shellcheck source=./lib.sh
@@ -211,6 +211,19 @@ case "$timer_state" in
     fi
     ;;
 esac
+
+step "host permit"
+permit_rc=0
+if bash "$MANILOV_SCRIPTS_DIR/host-permit.sh" --check --host "$MANILOV_HOST"; then
+  pass_check "host-permit check passed"
+else
+  permit_rc=$?
+  if [ "$permit_rc" -eq 7 ]; then
+    fail_check "host-permit is missing or drifted (exit 7); repair with 'make -f Makefile.Manilov host-permit ARGS=--apply'"
+  else
+    fail_check "host-permit check failed (exit $permit_rc); see its output above"
+  fi
+fi
 
 step "manilov-network applier (read-only)"
 if [ "$(ctr_sh "$CONTAINER" <<EOF

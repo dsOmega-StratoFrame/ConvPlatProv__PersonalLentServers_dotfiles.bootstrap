@@ -1,0 +1,9 @@
+[Unit]
+Description=@Manilov host FORWARD permit (bootstrap-owned; scoped, no policy change)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=@@EXECSTART@@ --standalone --reconcile --host local --marker @@MARKER@@ --state-dir @@STATE_DIR@@
+RemainAfterExit=yes
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

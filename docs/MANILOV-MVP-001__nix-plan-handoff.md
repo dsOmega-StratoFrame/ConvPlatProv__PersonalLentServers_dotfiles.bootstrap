@@ -107,13 +107,13 @@ Export a stable `modulePath` (e.g. `toString ./default.nix`) so parity can prove
 ### 4.2 The two immutable profiles
 
 **`proxyarp`** (the `@salt` shape, generalized):
-- Resolve `UPLINK` from `params.uplink.name`; verify the permanent MAC if `params.uplink.expectPermanentMac` is set.
-- Create `tap0` with the pinned locally-administered MAC (`params.datapath.tapMac`); set `proxy_arp=1` on `UPLINK`; enable IPv4 forwarding on `UPLINK` and `tap0`; install the VM-path rules for `tap0 ↔ UPLINK`.
+- Resolve `UPLINK` from `params.uplink.name`.
+- Create `tap0`; set `proxy_arp=1` on `UPLINK`; enable IPv4 forwarding on `UPLINK` and `tap0`; install the VM-path rules for `tap0 ↔ UPLINK`, scoped by `params.peer.address` and `params.peer.mac`.
 - No bridge, no L3 move from the host; the host keeps its address.
 
 **`bridge`** (the `@terra` shape, generalized):
-- Precondition: a host `Unmanaged` drop-in matching `params.management.permanentMac` is visible in the read-only host-networkd view.
-- Resolve `UPLINK`; require no L3 on `UPLINK` (host relinquished); create `br0`, enslave `UPLINK`, apply `params.addressing` to `br0`, pin the `br0` MAC (`params.datapath.bridgeMac`), create `tap0` attached to `br0`, install the VM-path rules.
+- Precondition: a host `Unmanaged` drop-in for the management uplink is visible in the read-only host-networkd view.
+- Resolve `UPLINK`; require no L3 on `UPLINK` (host relinquished); create `br0`, enslave `UPLINK`, apply static addressing to `br0`, create `tap0` attached to `br0`, install the VM-path rules for `tap0 ↔ br0`, scoped by `params.peer.address` and `params.peer.mac`.
 - `rollback` removes `br0`/`tap0`, flushes only `inet manilov_vm`, writes `handoff.to = "host"`, and leaves `UPLINK` up but unaddressed so host networkd can reclaim it once the bootstrap removes the drop-in.
 
 Both profiles are ordered op lists in `profiles.nix`. The applier interprets one op vocabulary (`link.add`, `link.set`, `link.master`, `addr.add`, `sysctl.set`, `nft.load`, …). No profile-specific code paths beyond the op interpreter.
@@ -133,11 +133,12 @@ Top-level fields:
 Canonical selector subset: exactly `{schema, profile, role, owner}`; JSON with keys sorted, no insignificant whitespace, UTF-8. `selectorDigest = "sha256:" + hex(sha256(canonicalJson(selector)))`.
 
 `params` v1 fields:
-- `uplink`: `{ name: string, expectPermanentMac?: string }`
-- `management`: `{ permanentMac: string }` (bridge precondition)
-- `addressing`: `{ family: "ipv4", address, prefixLength, gateway? }`
-- `datapath`: `{ tap: string, tapMac: string, bridge?: string, bridgeMac?: string, proxyArp?: bool, forward?: [string] }`
-- `peer`: `{ kind: "vm", tap: string }`
+- `uplink`: `{ name: string }`
+- `management`: `{ address, prefix, gateway?, dns? }` (informational for the host permit)
+- `addressing`: `"static"`
+- `datapath`: `{ tap: string, bridge?: string }` (`bridge` is required for the bridge profile)
+- `peer`: `{ address: string, mac: string }` (`address` is an IPv4 address or CIDR; a bare address is treated as `/32`)
+- `confirmDeadline`: optional integer
 
 `paramsDigest = "sha256:" + hex(sha256(canonicalJson(params)))` is computed by the applier and stored in state for idempotence; it is not in the marker.
 
@@ -153,16 +154,17 @@ Example (`proxyarp`; synthetic values only):
   "owner": { "kind": "image", "id": "nikolaigogol" },
   "selectorDigest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "params": {
-    "uplink": { "name": "wlan-test0", "expectPermanentMac": "02:00:00:00:00:04" },
-    "management": { "permanentMac": "02:00:00:00:00:05" },
-    "addressing": { "family": "ipv4", "address": "203.0.113.10", "prefixLength": 24, "gateway": "203.0.113.1" },
-    "datapath": { "tap": "tap0", "tapMac": "02:00:00:00:00:06", "proxyArp": true, "forward": ["tap0", "wlan-test0"] },
-    "peer": { "kind": "vm", "tap": "tap0" }
+    "uplink": { "name": "wlan-test0" },
+    "management": { "address": "203.0.113.10", "prefix": 24, "gateway": "203.0.113.1" },
+    "addressing": "static",
+    "datapath": { "tap": "tap0" },
+    "peer": { "address": "203.0.113.20", "mac": "02:00:00:00:00:06" },
+    "confirmDeadline": 120
   }
 }
 ```
 
-The `bridge` example differs only in `profile="bridge"` and `datapath={ "bridge":"br0","bridgeMac":"02:00:00:00:00:07","tap":"tap0","tapMac":"02:00:00:00:00:08" }`.
+The `bridge` example differs only in `profile="bridge"` and `datapath={ "bridge":"br0","tap":"tap0" }`.
 
 Forward-compat: adding `role="consumer"` and the owner's `owner.id` requires no schema change. If the architect lands "N owners allowed", only `check`'s owner-uniqueness rule and the `consumer` code path change; `selectorDigest` and the `profiles.json` shape stay v1-compatible (additive fields only). The exact seam is `allowedSelectors` plus `check.owner-uniqueness` in §4.4.
 
@@ -189,9 +191,9 @@ Options:
 2. `schema`, `profile`, `role`, `owner` shapes valid (else 8).
 3. Recompute `selectorDigest`; must equal the field and be in `allowedSelectors[profile]` (else 3).
 4. `owner.kind == "image"` and `owner.id == imageId` (else 4).
-5. `params.uplink.name` exists, is up, and permanent MAC matches when given (else 5).
-6. No conflicting datapath/L3 owner: bridge → `UPLINK` has no address/default route and any existing `br0` is ours; proxyarp → any existing `tap0` matches `tapMac`; any foreign owner marker in `/run/manilov/owners/` is a conflict (else 6).
-7. Bridge only: `Unmanaged` drop-in matching `params.management.permanentMac` present in `hostNetworkdView` (else 7).
+5. `params.uplink.name` exists and is up (else 5).
+6. No conflicting datapath/L3 owner: bridge → `UPLINK` has no address/default route and any existing `br0` is ours; proxyarp → any existing `tap0` is ours; any foreign owner marker in `/run/manilov/owners/` is a conflict (else 6).
+7. Bridge only: `Unmanaged` drop-in for the management uplink is present in `hostNetworkdView` (else 7).
 8. `role == "consumer"`: `check` validates read-only and exits 0; `apply`/`rollback` exit 12.
 
 With `--json`, prints `{"ok":true,"profile":...,"checks":[...]}`.
@@ -466,5 +468,5 @@ No SSH, no Ansible, no `@terra`/`@salt` claims. State explicitly: "verified loca
 - Output attr names assumed as `dockerConfigurations.NikolaiGogol` and `nixosConfigurations.NikolaiGogol_inner`; confirm with `nix flake show`.
 - The repo's image builder/tag output name is not restated here; the harness records it.
 - The architect's multi-container rule is **resolved** by ADR 0007: exactly one datapath owner per host; any number of consumers. D10 is aligned. If the rule changes, only §4.3 forward-compat and §4.4 step 6 change.
-- `proxyarp` needs a pinned `tapMac` for the MAC pin; the bootstrap must supply it in `params.datapath.tapMac`.
-- `bridge` needs `params.datapath.bridgeMac` for the MAC pin; the bootstrap must supply it.
+- `proxyarp` and `bridge` need the VM NIC MAC in `params.peer.mac` so the permit can be MAC-scoped.
+- `bridge` needs `params.datapath.bridge` to declare the host side of the datapath pair.

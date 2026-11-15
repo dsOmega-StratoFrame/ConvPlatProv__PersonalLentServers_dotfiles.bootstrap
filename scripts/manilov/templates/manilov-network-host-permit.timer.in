@@ -1,0 +1,11 @@
+[Unit]
+Description=@Manilov host FORWARD permit timer (bootstrap-owned; idempotent)
+
+[Timer]
+OnBootSec=@@ON_BOOT@@
+OnUnitActiveSec=@@INTERVAL@@
+Unit=@@SERVICE@@
+Persistent=true
+
+[Install]
+WantedBy=timers.target

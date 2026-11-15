@@ -4,10 +4,14 @@
 # owns br0, the uplink enslavement, the L3 move, the MAC pin, tap0/proxyARP, IPv4
 # forwarding, the VM-path nftables rules, the tap attachment and the dead-man.
 # This makefile only drives the host-side surfaces the bootstrap owns:
-# preflight, the image/bind checks, the one-time networkd relinquish and the eth0
-# rescue. Nothing here creates a bridge, moves L3, pins a MAC or writes an nft
-# rule, and nothing here kills SSH -- except `host-relinquish --apply`, which is
-# the deliberate hand-off.
+# preflight, the image/bind checks, the one-time networkd relinquish, the eth0
+# rescue and the marker-scoped host FORWARD permit. Nothing here creates a
+# bridge, moves L3 or pins a MAC, and nothing here kills SSH -- except
+# `host-relinquish --apply`, which is the deliberate hand-off. The only nft
+# write is `host-permit --apply`: it adds a jump and a regular chain in the
+# existing host `filter` table (`ip filter` on @terra, `inet filter` as the
+# portable fallback) and never changes a policy, INPUT_PROTECT or a DOCKER-*
+# chain (ADR 0006 D4).
 #
 # Every mutating target defaults to dry-run and needs ARGS='--apply'.
 # `host-relinquish` additionally prompts unless ARGS also contains --yes.
@@ -21,6 +25,11 @@
 #   make -f Makefile.Manilov verify
 #   make -f Makefile.Manilov host-relinquish ARGS='--apply --yes'
 #   make -f Makefile.Manilov host-rescue ARGS=--apply
+#   make -f Makefile.Manilov host-permit
+#   make -f Makefile.Manilov host-permit ARGS=--apply
+#   make -f Makefile.Manilov host-permit ARGS='--install-units --apply'
+#   make -f Makefile.Manilov host-permit ARGS='--rollback --apply'
+#   make -f Makefile.Manilov test-host-permit
 #
 # MANILOV_HOST is the hosts.ini name (terra-local by default, `terra` in
 # production). Use MANILOV_HOST=local for a control-node-only check. No sudo is
@@ -33,7 +42,7 @@ SOURCE ?=
 
 include Makefile.Log
 
-.PHONY: help preflight image-check stage-virt-scripts container libvirt-check verify host-relinquish host-rescue
+.PHONY: help preflight image-check stage-virt-scripts container libvirt-check verify host-relinquish host-rescue host-permit test-host-permit
 
 help:
 	@echo "Manilov — bootstrap-owned network/lifecycle surfaces (host: $(MANILOV_HOST))"
@@ -45,6 +54,8 @@ help:
 	@echo "  verify              (read-only)  end-to-end aggregation"
 	@echo "  host-relinquish     (mutating)   Unmanaged=yes drop-in on the management uplink"
 	@echo "  host-rescue         (mutating)   timer + static address on the unconnected NIC"
+	@echo "  host-permit         (mutating)   scoped FORWARD permit for the VM path (check by default)"
+	@echo "  test-host-permit    (read-only)  hermetic fake-nft regression for host-permit.sh"
 	@echo ""
 	@echo "  Mutating targets default to dry-run. Add ARGS=--apply to execute;"
 	@echo "  host-relinquish also needs ARGS='--apply --yes' (or an interactive y)."
@@ -74,3 +85,9 @@ host-relinquish:
 
 host-rescue:
 	$(RUN_LOG) manilov-host-rescue bash $(MANILOV_SCRIPTS)/host-rescue.sh --host $(MANILOV_HOST) $(ARGS)
+
+host-permit:
+	$(RUN_LOG) manilov-host-permit bash $(MANILOV_SCRIPTS)/host-permit.sh --host $(MANILOV_HOST) $(ARGS)
+
+test-host-permit:
+	bash $(CURDIR)/tests/manilov/host-permit/run.sh

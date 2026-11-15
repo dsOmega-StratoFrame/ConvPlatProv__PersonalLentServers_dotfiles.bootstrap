@@ -30,3 +30,14 @@ manilov_network_state_dir: "/var/lib/manilov-network"
 manilov_host_rescue_address: ""
 manilov_host_rescue_interface: "eth0"
 
+# Host FORWARD permit (ADR 0006 D4): the image owns only drop-only tables, so the
+# host grants the marker-scoped VM-path permit in the existing host `filter`
+# table (`ip filter` on @terra, `inet filter` as the portable fallback). The
+# script reads the existing manilov_network_marker; these are non-secret
+# lifecycle knobs.
+manilov_host_permit_service: "manilov-network-host-permit.service"
+manilov_host_permit_timer: "manilov-network-host-permit.timer"
+manilov_host_permit_on_boot: "30s"
+manilov_host_permit_interval: "60s"
+manilov_host_permit_lib_dir: "/usr/local/lib/manilov"
+

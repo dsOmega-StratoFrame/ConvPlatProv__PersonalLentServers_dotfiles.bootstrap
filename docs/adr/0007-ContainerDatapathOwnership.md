@@ -1,14 +1,17 @@
 # ADR 0007 — One datapath owner per host; containers are consumers
 
-- **Status:** Accepted (2026.11.02) — naming follows the operator's `manilov-network` decision (D3a)
+- **Status:** Accepted (2026.11.02; amended 2026.11.03 for the E1 host-permit split) — naming follows the operator's `manilov-network` decision (D3a)
 - **Task:** `MANILOV-MVP-001`
 - **Target:** `@Manilov` (VM), hosted by `@NikolaiGogol` (NixOS system container)
 - **Host:** `@terra` (TOS 6, `bridge` profile); the rule also applies to `@salt`
-- **Related:** extends ADR 0006 D1/D2 (ownership boundary and marker selection);
+- **Related:** extends ADR 0006 D1/D2/D4a (ownership boundary, marker selection,
+  host permit);
   refines ADR 0002 (one content-addressed image identity)
-- **Revision:** 2 (2026.11.02). Standardizes the `manilov-network` names and
-  records the uplink-MAC rule (D3a). The invariant (D1), designation (D2) and
-  enforcement (D3) are unchanged.
+- **Revision:** 3 (2026.11.03). Records that the scoped VM-path forward permit
+  is host-owned and lies **outside** the datapath-owner contract (D1). Revision 2
+  (2026.11.02) standardized the `manilov-network` names and recorded the
+  uplink-MAC rule (D3a). The invariant (D1), designation (D2) and enforcement
+  (D3) are otherwise unchanged.
 - **Decision owner:** operator. **Reviewer:** not set (`reviewed-by` is never set
   by the architect).
 - **Evidence:** `docs/NetworkTopology__@terra__@Manilov.md`,
@@ -42,8 +45,14 @@ delete the other's bridge.
 
 **Exactly one datapath owner per host; any number of containers may be
 consumers.** The owner is the single writer of `br0`, the uplink enslavement, L3,
-the MAC pin, the VM-path rules, and the tap attachments. Consumers never run a
-mutating verb and never touch those surfaces.
+the MAC pin, the VM-path anti-spoof/isolation *drops*, and the tap attachments.
+Consumers never run a mutating verb and never touch those surfaces.
+
+**The forward permit is not part of the owner contract.** The scoped VM-path
+forward permit (`MANILOV_FORWARD` in the host `filter` table) is host-owned
+(ADR 0006 D4a). The datapath-owner contract covers only the image's dedicated
+drop-only tables and the *read-only* verification of the permit: the owner never
+writes the permit, and a missing permit fails closed instead of being repaired.
 
 C′ therefore does **not** limit the number of containers; it limits the number of
 *owners* to one. On `@terra` you may run N `@NikolaiGogol`-like containers; exactly
@@ -218,6 +227,8 @@ not an option on `@terra` as it stands.
   change.
 - The lock/state directory must be host-shared (bind-mounted), never
   container-private, or the enforcement is void.
+- No container may write the host forward permit (`MANILOV_FORWARD`) or repair a
+  missing permit; verification is read-only (D1, ADR 0006 D4a).
 - No short-form `manilov-net` unit, path, or directory may be introduced; the
   name is `manilov-network` (D3a).
 
