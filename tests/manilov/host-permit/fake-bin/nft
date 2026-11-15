@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""Stateful, hermetic nft(8) shim for the host-permit regression harness.
+
+Only the invocations made by ``scripts/manilov/host-permit.sh`` (and the
+harness assertions) are implemented.  State lives in the JSON file named by
+``FAKE_NFT_STATE``; nothing else on the machine is read or written.
+
+Supported:
+  list tables
+  list table FAMILY TABLE
+  list chain FAMILY TABLE CHAIN
+  [-a] list ruleset
+  [-a] list chain ...
+  -j list ruleset
+  add chain / add rule / insert rule / delete rule / delete chain / flush chain
+  -f -            (batch of the commands above on stdin)
+
+Deliberate differences from real nft:
+  * ``add chain`` never creates a table or a base chain; the production script
+    is required not to create either.
+  * chains are rendered in name order and rule order is preserved, so the
+    output is stable for before/after byte comparisons.
+  * ``-j list ruleset`` emits a normalised view (tables/chains/rules/handles)
+    rather than nft's exact JSON schema; it is only used by the harness.
+"""
+
+import json
+import os
+import re
+import shlex
+import sys
+
+STATE_PATH = os.environ.get("FAKE_NFT_STATE", "")
+
+
+def die(message):
+    print("Error: %s" % message, file=sys.stderr)
+    sys.exit(1)
+
+
+def load():
+    if not os.path.exists(STATE_PATH):
+        return {"next": 100, "tables": {}}
+    with open(STATE_PATH, encoding="utf-8") as handle:
+        state = json.load(handle)
+    state.setdefault("next", 100)
+    state.setdefault("tables", {})
+    return state
+
+
+def save(state):
+    with open(STATE_PATH, "w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def split_table(key):
+    family, name = key.split(" ", 1)
+    return family, name
+
+
+def get_table(state, family, name):
+    return state["tables"].get("%s %s" % (family, name))
+
+
+def require_table(state, family, name):
+    table = get_table(state, family, name)
+    if table is None:
+        die("No such file or directory: table %s %s" % (family, name))
+    return table
+
+
+def get_chain(state, family, name, chain):
+    table = get_table(state, family, name)
+    if table is None:
+        return None
+    return table["chains"].get(chain)
+
+
+def require_chain(state, family, name, chain):
+    value = get_chain(state, family, name, chain)
+    if value is None:
+        die("No such file or directory: chain %s %s %s" % (family, name, chain))
+    return value
+
+
+def new_handle(state):
+    handle = int(state["next"])
+    state["next"] = handle + 1
+    return handle
+
+
+def render_rule(rule, with_handles):
+    text = rule["text"]
+    if with_handles:
+        return "%s # handle %d" % (text, rule["handle"])
+    return text
+
+
+def render_chain(name, chain, with_handles):
+    lines = ["\tchain %s {" % name]
+    if not chain.get("regular", False):
+        lines.append(
+            "\t\ttype filter hook %s priority %s; policy %s;"
+            % (
+                chain.get("hook", "forward"),
+                chain.get("priority", "filter"),
+                chain.get("policy", "accept"),
+            )
+        )
+    for rule in chain.get("rules", []):
+        lines.append("\t\t%s" % render_rule(rule, with_handles))
+    lines.append("\t}")
+    return lines
+
+
+def render_table(state, family, name, with_handles):
+    table = require_table(state, family, name)
+    lines = ["table %s %s {" % (family, name)]
+    for chain_name in sorted(table["chains"]):
+        lines.extend(render_chain(chain_name, table["chains"][chain_name], with_handles))
+    lines.append("}")
+    return lines
+
+
+def json_view(state):
+    tables = {}
+    for key in sorted(state["tables"]):
+        family, name = split_table(key)
+        chains = {}
+        for chain_name in sorted(state["tables"][key]["chains"]):
+            chain = state["tables"][key]["chains"][chain_name]
+            entry = {"regular": bool(chain.get("regular", False))}
+            if not entry["regular"]:
+                entry["hook"] = chain.get("hook", "forward")
+                entry["priority"] = chain.get("priority", "filter")
+                entry["policy"] = chain.get("policy", "accept")
+            entry["rules"] = [
+                {"handle": rule["handle"], "text": rule["text"]}
+                for rule in chain.get("rules", [])
+            ]
+            chains[chain_name] = entry
+        tables[key] = {"family": family, "name": name, "chains": chains}
+    return {"tables": tables}
+
+
+def chain_is_referenced(state, chain_name):
+    pattern = re.compile(r"(?:^|\s)(?:jump|goto)\s+%s(?:\s|$)" % re.escape(chain_name))
+    for table in state["tables"].values():
+        for chain in table["chains"].values():
+            for rule in chain.get("rules", []):
+                if pattern.search(rule["text"]):
+                    return True
+    return False
+
+
+def add_chain(state, words):
+    if len(words) != 3:
+        die("add chain needs FAMILY TABLE CHAIN")
+    family, name, chain_name = words
+    table = require_table(state, family, name)
+    if chain_name in table["chains"]:
+        die("File exists: chain %s %s %s" % (family, name, chain_name))
+    table["chains"][chain_name] = {"regular": True, "rules": []}
+
+
+def add_rule(state, words):
+    if len(words) < 4:
+        die("add rule needs FAMILY TABLE CHAIN EXPRESSION")
+    family, name, chain_name = words[:3]
+    chain = require_chain(state, family, name, chain_name)
+    chain.setdefault("rules", []).append(
+        {"handle": new_handle(state), "text": " ".join(words[3:])}
+    )
+
+
+def insert_rule(state, words):
+    if "handle" not in words:
+        die("insert rule needs 'handle N'")
+    index = words.index("handle")
+    if index < 3 or index + 1 >= len(words):
+        die("insert rule needs FAMILY TABLE CHAIN handle N EXPRESSION")
+    family, name, chain_name = words[:3]
+    target = int(words[index + 1])
+    expression = words[:index] + words[index + 2 :]
+    chain = require_chain(state, family, name, chain_name)
+    rules = chain.setdefault("rules", [])
+    position = next((i for i, rule in enumerate(rules) if rule["handle"] == target), None)
+    if position is None:
+        die("Could not process rule: handle %d not found" % target)
+    rules.insert(
+        position,
+        {"handle": new_handle(state), "text": " ".join(expression[3:])},
+    )
+
+
+def delete_rule(state, words):
+    if "handle" not in words:
+        die("delete rule needs 'handle N'")
+    index = words.index("handle")
+    if index < 3 or index + 1 >= len(words):
+        die("delete rule needs FAMILY TABLE CHAIN handle N")
+    family, name, chain_name = words[:3]
+    target = int(words[index + 1])
+    chain = require_chain(state, family, name, chain_name)
+    rules = chain.setdefault("rules", [])
+    for position, rule in enumerate(rules):
+        if rule["handle"] == target:
+            del rules[position]
+            return
+    die("Could not process rule: handle %d not found" % target)
+
+
+def delete_chain(state, words):
+    if len(words) != 3:
+        die("delete chain needs FAMILY TABLE CHAIN")
+    family, name, chain_name = words
+    table = require_table(state, family, name)
+    if chain_name not in table["chains"]:
+        die("No such file or directory: chain %s %s %s" % (family, name, chain_name))
+    if chain_is_referenced(state, chain_name):
+        die("Device or resource busy: chain %s %s %s is referenced" % (family, name, chain_name))
+    del table["chains"][chain_name]
+
+
+def flush_chain(state, words):
+    if len(words) != 3:
+        die("flush chain needs FAMILY TABLE CHAIN")
+    family, name, chain_name = words
+    chain = require_chain(state, family, name, chain_name)
+    chain["rules"] = []
+
+
+def dispatch(state, words):
+    if not words:
+        die("empty command")
+    verb = words[0]
+    if verb == "add" and len(words) > 1 and words[1] == "chain":
+        add_chain(state, words[2:])
+    elif verb == "add" and len(words) > 1 and words[1] == "rule":
+        add_rule(state, words[2:])
+    elif verb == "insert" and len(words) > 1 and words[1] == "rule":
+        insert_rule(state, words[2:])
+    elif verb == "delete" and len(words) > 1 and words[1] == "rule":
+        delete_rule(state, words[2:])
+    elif verb == "delete" and len(words) > 1 and words[1] == "chain":
+        delete_chain(state, words[2:])
+    elif verb == "flush" and len(words) > 1 and words[1] == "chain":
+        flush_chain(state, words[2:])
+    else:
+        die("unsupported command: %s" % " ".join(words))
+
+
+def list_command(state, words, with_handles, as_json):
+    if not words:
+        die("list needs a target")
+    what = words[0]
+    if what == "tables" and len(words) == 1:
+        for key in sorted(state["tables"]):
+            family, name = split_table(key)
+            print("table %s %s" % (family, name))
+        return
+    if what == "table" and len(words) == 3:
+        lines = render_table(state, words[1], words[2], with_handles)
+    elif what == "chain" and len(words) == 4:
+        family, name, chain_name = words[1:]
+        table = require_table(state, family, name)
+        chain = table["chains"].get(chain_name)
+        if chain is None:
+            die("No such file or directory: chain %s %s %s" % (family, name, chain_name))
+        lines = ["table %s %s {" % (family, name)]
+        lines.extend(render_chain(chain_name, chain, with_handles))
+        lines.append("}")
+    elif what == "ruleset" and len(words) == 1:
+        if as_json:
+            print(json.dumps(json_view(state), indent=2, sort_keys=True))
+            return
+        lines = []
+        for key in sorted(state["tables"]):
+            family, name = split_table(key)
+            if lines:
+                lines.append("")
+            lines.extend(render_table(state, family, name, with_handles))
+    else:
+        die("unsupported invocation: list %s" % " ".join(words))
+    if as_json:
+        die("-j is only implemented for 'list ruleset'")
+    print("\n".join(lines))
+
+
+def main(argv):
+    if not STATE_PATH:
+        die("FAKE_NFT_STATE is not set")
+    args = list(argv)
+    with_handles = False
+    as_json = False
+    while args and args[0].startswith("-"):
+        flag = args.pop(0)
+        if flag == "-a":
+            with_handles = True
+        elif flag == "-j":
+            as_json = True
+        elif flag == "-f":
+            args.insert(0, flag)
+            break
+        elif flag in ("-n", "--numeric"):
+            continue
+        else:
+            die("unsupported flag: %s" % flag)
+
+    state = load()
+    if not args:
+        die("usage: nft [flags] COMMAND ...")
+
+    if args[0] == "-f":
+        if len(args) != 2 or args[1] != "-":
+            die("-f expects '-'")
+        for line in sys.stdin:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            dispatch(state, shlex.split(line))
+        save(state)
+        return
+
+    if args[0] == "list":
+        list_command(state, args[1:], with_handles, as_json)
+        return
+
+    if args[0] in ("add", "insert", "delete", "flush"):
+        dispatch(state, args)
+        save(state)
+        return
+
+    die("unsupported invocation: %s" % " ".join(args))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

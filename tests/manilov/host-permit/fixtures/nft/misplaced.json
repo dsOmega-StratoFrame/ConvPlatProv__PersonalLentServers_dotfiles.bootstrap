@@ -1,0 +1,57 @@
+{
+  "next": 200,
+  "tables": {
+    "ip filter": {
+      "chains": {
+        "FORWARD": {
+          "regular": false,
+          "hook": "forward",
+          "priority": "filter",
+          "policy": "drop",
+          "rules": [
+            {
+              "handle": 86,
+              "text": "jump DOCKER-USER"
+            },
+            {
+              "handle": 78,
+              "text": "jump DOCKER-FORWARD"
+            },
+            {
+              "handle": 99,
+              "text": "jump MANILOV_FORWARD comment manilov-host-permit"
+            }
+          ]
+        },
+        "MANILOV_FORWARD": {
+          "regular": true,
+          "rules": [
+            {
+              "handle": 97,
+              "text": "iifname tap0 oifname eth0 ip saddr 192.168.1.10/32 ether saddr aa:bb:cc:dd:ee:ff accept"
+            },
+            {
+              "handle": 98,
+              "text": "iifname eth0 oifname tap0 ip daddr 192.168.1.10/32 ether daddr aa:bb:cc:dd:ee:ff accept"
+            }
+          ]
+        },
+        "DOCKER-USER": {
+          "regular": true,
+          "rules": []
+        },
+        "DOCKER-FORWARD": {
+          "regular": true,
+          "rules": []
+        },
+        "INPUT": {
+          "regular": false,
+          "hook": "input",
+          "priority": "filter",
+          "policy": "accept",
+          "rules": []
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "next": 100,
+  "tables": {
+    "ip filter": {
+      "chains": {
+        "INPUT": {
+          "regular": false,
+          "hook": "input",
+          "priority": "filter",
+          "policy": "accept",
+          "rules": []
+        }
+      }
+    },
+    "inet filter": {
+      "chains": {
+        "INPUT": {
+          "regular": false,
+          "hook": "input",
+          "priority": "filter",
+          "policy": "accept",
+          "rules": []
+        }
+      }
+    }
+  }
+}

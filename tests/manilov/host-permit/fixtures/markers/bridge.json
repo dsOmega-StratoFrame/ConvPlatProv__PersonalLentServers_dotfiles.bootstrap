@@ -1,0 +1,14 @@
+{
+  "schema": "manilov.network.marker/v1",
+  "profile": "bridge",
+  "role": "owner",
+  "params": {
+    "uplink": {
+      "name": "eth0"
+    },
+    "datapath": {
+      "tap": "tap0",
+      "bridge": "br0"
+    }
+  }
+}

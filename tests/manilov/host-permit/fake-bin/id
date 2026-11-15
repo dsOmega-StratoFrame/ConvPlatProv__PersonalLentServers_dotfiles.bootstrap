@@ -1,0 +1,29 @@
+#!/bin/sh
+# Minimal id(8) shim for the host-permit regression harness.
+#
+# host-permit.sh calls `id -u` through require_host_uid0 so it can refuse a
+# non-root session.  The harness must run without root, so `id -u` reports 0.
+# Any other invocation is delegated to the next real id(8) on PATH.
+set -u
+
+if [ "${1:-}" = "-u" ]; then
+  printf '0\n'
+  exit 0
+fi
+
+self_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  if [ "$dir" = "$self_dir" ]; then
+    continue
+  fi
+  if [ -x "$dir/id" ]; then
+    IFS=$old_ifs
+    exec "$dir/id" "$@"
+  fi
+done
+IFS=$old_ifs
+
+printf 'fake id: unsupported invocation: %s\n' "$*" >&2
+exit 1

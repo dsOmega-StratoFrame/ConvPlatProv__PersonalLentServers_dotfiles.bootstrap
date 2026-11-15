@@ -1,0 +1,33 @@
+{
+  "next": 200,
+  "tables": {
+    "ip filter": {
+      "chains": {
+        "FORWARD": {
+          "regular": false,
+          "hook": "forward",
+          "priority": "filter",
+          "policy": "drop",
+          "rules": [
+            {
+              "handle": 86,
+              "text": "goto DOCKER-USER"
+            },
+            {
+              "handle": 78,
+              "text": "jump DOCKER-FORWARD"
+            }
+          ]
+        },
+        "DOCKER-USER": {
+          "regular": true,
+          "rules": []
+        },
+        "DOCKER-FORWARD": {
+          "regular": true,
+          "rules": []
+        }
+      }
+    }
+  }
+}

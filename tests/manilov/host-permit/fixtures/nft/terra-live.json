@@ -1,0 +1,58 @@
+{
+  "next": 200,
+  "tables": {
+    "ip filter": {
+      "chains": {
+        "FORWARD": {
+          "regular": false,
+          "hook": "forward",
+          "priority": "filter",
+          "policy": "drop",
+          "rules": [
+            {
+              "handle": 86,
+              "text": "jump DOCKER-USER"
+            },
+            {
+              "handle": 78,
+              "text": "jump DOCKER-FORWARD"
+            }
+          ]
+        },
+        "DOCKER-USER": {
+          "regular": true,
+          "rules": []
+        },
+        "DOCKER-FORWARD": {
+          "regular": true,
+          "rules": [
+            {
+              "handle": 90,
+              "text": "iifname != docker0 return"
+            },
+            {
+              "handle": 91,
+              "text": "iifname docker0 jump DOCKER-BRIDGE"
+            }
+          ]
+        },
+        "DOCKER-BRIDGE": {
+          "regular": true,
+          "rules": []
+        },
+        "INPUT": {
+          "regular": false,
+          "hook": "input",
+          "priority": "filter",
+          "policy": "accept",
+          "rules": [
+            {
+              "handle": 10,
+              "text": "ct state established,related accept"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
